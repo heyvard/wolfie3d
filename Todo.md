@@ -15,7 +15,7 @@ Til slutt samler vi alt og setter det sammen til en demo for JavaZone 🚀
 - [x] 🏆 **Score:** +100 poeng per fiende drept, vis på skjermen  
 
 ## 🔫 Våpen & ammo
-- [ ] 🔢 **Ammo-teller:** Spilleren har begrenset ammo  
+- [x] 🔢 **Ammo-teller:** Spilleren har begrenset sauer (5 stykker)  
 - [ ] 🔄 **Reload:** Trykk `R` for å lade om  
 - [ ] 📦 **Pickup-objekt:** Lag et ammo-box på gulvet som kan plukkes opp  
 

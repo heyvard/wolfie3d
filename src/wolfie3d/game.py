@@ -36,7 +36,7 @@ from OpenGL import GL as gl
 # Import refactored modules
 from .utils.constants import *
 from .utils.input import handle_input
-from .world.map import try_move, in_map, is_wall, clamp01
+from .world.map import try_move, in_map, is_wall, clamp01, find_valid_spawn_position
 from .entities.bullet import Bullet, SauBullet
 from .entities.enemy import Enemy
 
@@ -59,6 +59,9 @@ player_invulnerable_time = 0.0  # Tid hvor spilleren ikke kan ta skade
 
 # Score system
 player_score = 0
+
+# Sau system
+sau_count = 5  # Begrenset til 5 sauer - hver sau gjør 2 skade
 
 # ---------- Hjelpere ----------
 # ---------- Prosedural tekstur (pygame.Surface) ----------
@@ -895,6 +898,36 @@ def build_score_display() -> np.ndarray:
     
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
+def build_sau_count_display() -> np.ndarray:
+    """Viser antall sauer igjen øverst til høyre."""
+    global sau_count
+    
+    # Sau-teller boks
+    bar_width = 80
+    bar_height = 25
+    x = WIDTH - bar_width - 10
+    y = 85  # Under score
+    
+    x0 = (2.0 * x) / WIDTH - 1.0
+    x1 = (2.0 * (x + bar_width)) / WIDTH - 1.0
+    y0 = 1.0 - 2.0 * (y / HEIGHT)
+    y1 = 1.0 - 2.0 * ((y + bar_height) / HEIGHT)
+    
+    # Hvit farge for sau-teller
+    r, g, b = 1.0, 1.0, 1.0
+    depth = 0.0
+    
+    verts = [
+        x0, y0, 0.0, 0.0, r, g, b, depth,
+        x0, y1, 0.0, 1.0, r, g, b, depth,
+        x1, y0, 1.0, 0.0, r, g, b, depth,
+        x1, y0, 1.0, 0.0, r, g, b, depth,
+        x0, y1, 0.0, 1.0, r, g, b, depth,
+        x1, y1, 1.0, 1.0, r, g, b, depth,
+    ]
+    
+    return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
+
 def show_game_over_screen(renderer, final_score: int) -> None:
     """Viser Game Over skjerm med final score."""
     print("=== GAME OVER ===")
@@ -1106,7 +1139,7 @@ def try_move_player(nx: float, ny: float) -> tuple[float, float]:
 
 # ---------- Main ----------
 def main() -> None:
-    global current_weapon, player_hp, player_invulnerable_time, player_score, player_x, player_y, dir_x, dir_y, plane_x, plane_y
+    global current_weapon, player_hp, player_invulnerable_time, player_score, sau_count, player_x, player_y, dir_x, dir_y, plane_x, plane_y
     pygame.init()
     pygame.display.set_caption("Vibe Wolf (OpenGL)")
 
@@ -1126,16 +1159,15 @@ def main() -> None:
     firing = False
     recoil_t = 0.0
 
-    enemies: list[Enemy] = [
-        Enemy(6.5, 10.5, "normal"),   # Vanlig fiende
-        Enemy(12.5, 12.5, "normal"),  # Vanlig fiende
-        Enemy(16.5, 6.5, "strong"),   # Sterk fiende
-        Enemy(8.5, 8.5, "fast"),      # Rask fiende
-        Enemy(14.5, 8.5, "normal"),   # Vanlig fiende
-        Enemy(10.5, 14.5, "strong"),  # Sterk fiende
-        Enemy(18.5, 10.5, "fast"),    # Rask fiende
-        Enemy(4.5, 12.5, "normal"),   # Vanlig fiende
-    ]
+    # Spawn enemies at valid floor positions with minimum distance between them
+    enemies: list[Enemy] = []
+    enemy_types = ["normal", "normal", "strong", "fast", "normal", "strong", "fast", "normal"]
+    existing_positions = [(player_x, player_y)]  # Start with player position to avoid spawning too close
+    
+    for enemy_type in enemy_types:
+        x, y = find_valid_spawn_position(existing_positions, min_distance=3.0)  # Increased distance from player
+        enemies.append(Enemy(x, y, enemy_type))
+        existing_positions.append((x, y))
 
     # Mus-capture (synlig cursor + crosshair)
     pygame.event.set_grab(True)
@@ -1165,12 +1197,17 @@ def main() -> None:
                         bvy = dir_y * 12.0
                         bullets.append(Bullet(bx, by, bvx, bvy))
                     else:  # WEAPON_SAU
-                        # Sau - send sau som prosjektil
-                        bx = player_x + dir_x * 0.4
-                        by = player_y + dir_y * 0.4
-                        bvx = dir_x * 6.0   # Tregere
-                        bvy = dir_y * 6.0
-                        bullets.append(SauBullet(bx, by, bvx, bvy))
+                        # Sau - send sau som prosjektil (kun hvis det er sauer igjen)
+                        if sau_count > 0:
+                            bx = player_x + dir_x * 0.4
+                            by = player_y + dir_y * 0.4
+                            bvx = dir_x * 6.0   # Tregere
+                            bvy = dir_y * 6.0
+                            bullets.append(SauBullet(bx, by, bvx, bvy))
+                            sau_count -= 1  # Bruk en sau
+                            print(f"Sau skutt! {sau_count} sauer igjen")
+                        else:
+                            print("Ingen sauer igjen!")
                     firing = True
                     recoil_t = 0.0
                 if event.key == pygame.K_1:
@@ -1189,12 +1226,17 @@ def main() -> None:
                     bvy = dir_y * 12.0
                     bullets.append(Bullet(bx, by, bvx, bvy))
                 else:  # WEAPON_SAU
-                    # Sau - send sau som prosjektil
-                    bx = player_x + dir_x * 0.4
-                    by = player_y + dir_y * 0.4
-                    bvx = dir_x * 6.0   # Tregere
-                    bvy = dir_y * 6.0
-                    bullets.append(SauBullet(bx, by, bvx, bvy))
+                    # Sau - send sau som prosjektil (kun hvis det er sauer igjen)
+                    if sau_count > 0:
+                        bx = player_x + dir_x * 0.4
+                        by = player_y + dir_y * 0.4
+                        bvx = dir_x * 6.0   # Tregere
+                        bvy = dir_y * 6.0
+                        bullets.append(SauBullet(bx, by, bvx, bvy))
+                        sau_count -= 1  # Bruk en sau
+                        print(f"Sau skutt! {sau_count} sauer igjen")
+                    else:
+                        print("Ingen sauer igjen!")
                 firing = True
                 recoil_t = 0.0
 
@@ -1217,8 +1259,10 @@ def main() -> None:
                 dx = e.x - b.x
                 dy = e.y - b.y
                 if dx * dx + dy * dy <= (e.radius * e.radius):
-                    e.hp -= 1  # Fienden tar skade
-                    b.alive = False  # kula forbrukes
+                    # Sau gjør 2 skade, kuler gjør 1 skade
+                    damage = 2 if isinstance(b, SauBullet) else 1
+                    e.hp -= damage
+                    b.alive = False  # kula/sauen forbrukes
                     if e.hp <= 0:
                         e.is_dying = True  # Start dødsanimasjon
                         e.death_time = 0.0
@@ -1346,6 +1390,10 @@ def main() -> None:
         # Score display
         score_display = build_score_display()
         renderer.draw_arrays(score_display, renderer.white_tex, use_tex=False)
+
+        # Sau count display
+        sau_count_display = build_sau_count_display()
+        renderer.draw_arrays(sau_count_display, renderer.white_tex, use_tex=False)
 
         pygame.display.flip()
 
