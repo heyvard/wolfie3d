@@ -1,5 +1,11 @@
 [
   {
+    "name": "sdfdsf",
+    "score": 1300,
+    "time_remaining": 36.35399999999651,
+    "final_score": 1663
+  },
+  {
     "name": "H\u00e5vsrad",
     "score": 1200,
     "time_remaining": 33.63999999999639,
@@ -30,6 +36,12 @@
     "final_score": 1196
   },
   {
+    "name": "fddfh",
+    "score": 800,
+    "time_remaining": 36.572999999996824,
+    "final_score": 1165
+  },
+  {
     "name": "h\u00e5\u00e5\u00e5",
     "score": 500,
     "time_remaining": 41.469999999997995,
@@ -46,17 +58,5 @@
     "score": 200,
     "time_remaining": 45.22099999999813,
     "final_score": 652
-  },
-  {
-    "name": "h\u00e5\u00e5",
-    "score": 100,
-    "time_remaining": 44.763999999998,
-    "final_score": 547
-  },
-  {
-    "name": "h\u00e5vard",
-    "score": 0,
-    "time_remaining": 45.519999999998035,
-    "final_score": 455
   }
 ]

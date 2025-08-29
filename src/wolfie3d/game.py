@@ -1355,9 +1355,15 @@ def show_highscores_screen(renderer, final_score: int, time_remaining: float) ->
         gl.glClearColor(0.0, 0.0, 0.0, 1.0)
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
         
-        # Highscores boks
-        hs_width = 500
-        hs_height = 450  # Litt høyere for å plassere til spill igjen-knapp
+        # Highscores boks - dynamisk størrelse basert på antall entries
+        num_entries = min(len(highscores), 10)
+        entry_height = 50  # Høyde per entry (inkludert detaljer) - redusert fra 60
+        title_height = 100   # Plass for tittel - økt fra 80
+        button_height = 120 # Plass for knapper - økt fra 100
+        margin = 60         # Margin på topp og bunn - økt fra 40
+        
+        hs_width = 750  # Bredere for bedre layout
+        hs_height = title_height + (num_entries * entry_height) + button_height + margin
         x = (WIDTH - hs_width) // 2
         y = (HEIGHT - hs_height) // 2
         
@@ -1383,31 +1389,31 @@ def show_highscores_screen(renderer, final_score: int, time_remaining: float) ->
         renderer.draw_arrays(hs_array, renderer.white_tex, use_tex=False)
         
         # Render tekst via OpenGL
-        draw_text_px(renderer, "HIGHSCORES", WIDTH//2 - 100, y + 30, size=48, color=(0, 0, 0))
+        draw_text_px(renderer, "HIGHSCORES", x + (hs_width - 250)//2, y + 40, size=40, color=(0, 0, 0))
         
-        # Render highscores
-        y_offset = y + 80
+        # Render highscores med bedre spacing
+        y_offset = y + 120  # Mer plass etter tittel
         for i, hs in enumerate(highscores[:10], 1):
             if "final_score" in hs:
-                score_text = f"{i:2d}. {hs['name']:<12} {hs['final_score']:>6}"
-                draw_text_px(renderer, score_text, x + 20, y_offset, size=24, color=(0, 0, 0))
+                score_text = f"{i:2d}. {hs['name']:<15} {hs['final_score']:>6}"
+                draw_text_px(renderer, score_text, x + 50, y_offset, size=20, color=(0, 0, 0))
                 # Vis detaljer på neste linje
                 minutes = int(hs['time_remaining']) // 60
                 seconds = int(hs['time_remaining']) % 60
                 time_str = f"{minutes:01d}:{seconds:02d}"
                 detail_text = f"    Score: {hs['score']} + {int(hs['time_remaining'] * 10)} tid ({time_str})"
-                draw_text_px(renderer, detail_text, x + 20, y_offset + 20, size=16, color=(100, 100, 100))
-                y_offset += 40
+                draw_text_px(renderer, detail_text, x + 50, y_offset + 20, size=14, color=(100, 100, 100))
+                y_offset += 50  # Mindre mellomrom mellom hver entry - matcher entry_height
             else:
                 # Legacy format
                 score_text = f"{i:2d}. {hs['name']:<15} {hs['score']:>6}"
-                draw_text_px(renderer, score_text, x + 20, y_offset, size=24, color=(0, 0, 0))
-                y_offset += 25
+                draw_text_px(renderer, score_text, x + 50, y_offset, size=20, color=(0, 0, 0))
+                y_offset += 40
         
-        # Render spill igjen-knapp
-        play_again_y = y + hs_height - 80
-        draw_text_px(renderer, "Trykk ENTER for å spille igjen", WIDTH//2 - 150, play_again_y, size=24, color=(0, 0, 0))
-        draw_text_px(renderer, "Trykk ESC for å avslutte", WIDTH//2 - 120, play_again_y + 30, size=24, color=(0, 0, 0))
+        # Render spill igjen-knapp - plassert nederst i boksen med god margin
+        play_again_y = y + hs_height - 100
+        draw_text_px(renderer, "Trykk ENTER for å spille igjen", x + 120, play_again_y, size=20, color=(0, 0, 0))
+        draw_text_px(renderer, "Trykk ESC for å avslutte", x + 120, play_again_y + 30, size=20, color=(0, 0, 0))
         
         pygame.display.flip()
         
