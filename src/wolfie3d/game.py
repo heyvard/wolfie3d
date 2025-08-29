@@ -1903,6 +1903,9 @@ def main() -> None:
         # Sau count display
         sau_count_display = build_sau_count_display()
         renderer.draw_arrays(sau_count_display, renderer.white_tex, use_tex=False)
+        
+        # Render sheep count text
+        draw_text_px(renderer, f"Sauer: {sau_count}", WIDTH - 85, 90, size=20, color=(0, 0, 0))
 
         # Enemy spawn countdown (kun hvis fiendene ikke har spawnet ennå)
         countdown_display = build_enemy_spawn_countdown(enemies_spawned, enemy_spawn_timer, enemy_spawn_delay)
