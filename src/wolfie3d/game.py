@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import math
 import sys
+import json
+import os
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -42,6 +44,91 @@ from .entities.enemy import Enemy
 
 if TYPE_CHECKING:  # kun for typing hints
     from collections.abc import Sequence
+
+# ---------- Font håndtering ----------
+def get_font(size: int) -> pygame.font.Font:
+    """Henter en font som alltid fungerer på macOS og andre systemer.
+    
+    Bruker pygame's innebygde bitmap-font som er garantert tilgjengelig.
+    Dette løser problemet med tekst som rendres som firkanter.
+    """
+    pygame.font.init()
+    
+    # Prøv først pygame's innebygde freesans font som alltid er tilgjengelig
+    try:
+        font_path = pygame.font.match_font('freesans')
+        if font_path:
+            font = pygame.font.Font(font_path, size)
+            test_surface = font.render("A", True, (255, 255, 255))
+            if test_surface.get_width() > 0 and test_surface.get_height() > 0:
+                print("[Font] Bruker pygame's innebygde freesans font")
+                return font
+    except:
+        pass
+    
+    # Fallback til system default
+    try:
+        font = pygame.font.Font(None, size)
+        test_surface = font.render("A", True, (255, 255, 255))
+        if test_surface.get_width() > 0 and test_surface.get_height() > 0:
+            print("[Font] Bruker system default font")
+            return font
+    except:
+        pass
+    
+    # Siste utvei: bruk pygame's fallback font
+    print("[Font] Bruker pygame's fallback font")
+    return pygame.font.Font(None, size)
+
+# ---------- OpenGL tekstrendering ----------
+_text_cache = {}  # (string, size, color) -> (tex_id, w, h)
+
+def clear_text_cache():
+    """Rydder opp i tekst-cachen ved å frigjøre OpenGL teksturer."""
+    global _text_cache
+    for tex_id, w, h in _text_cache.values():
+        try:
+            gl.glDeleteTextures([tex_id])
+        except:
+            pass
+    _text_cache.clear()
+
+def draw_text_px(renderer, text: str, x: int, y: int, size: int = 32, color: tuple = (255, 255, 255)) -> None:
+    """Tegner tekst via OpenGL som tekstur i stedet for pygame blit.
+    
+    Dette løser problemet med tekst som rendres som firkanter på macOS
+    når man bruker pygame.OPENGL mode.
+    """
+    key = (text, size, color)
+    
+    # Cache tekstur hvis den ikke allerede eksisterer
+    if key not in _text_cache:
+        font = get_font(size)
+        surf = font.render(text, True, color)
+        tex_id = surface_to_texture(surf)
+        w, h = surf.get_width(), surf.get_height()
+        _text_cache[key] = (tex_id, w, h)
+    
+    tex_id, w, h = _text_cache[key]
+    
+    # Bygg skjerm-space quad i piksler (topleft = (x,y))
+    x0 = (2.0 * x) / WIDTH - 1.0
+    x1 = (2.0 * (x + w)) / WIDTH - 1.0
+    y0 = 1.0 - 2.0 * (y / HEIGHT)
+    y1 = 1.0 - 2.0 * ((y + h) / HEIGHT)
+    
+    r = g = b = 1.0
+    depth = 0.0  # helt foran
+    verts = np.asarray([
+        x0, y0, 0.0, 1.0, r, g, b, depth,  # Bottom-left
+        x0, y1, 0.0, 0.0, r, g, b, depth,  # Top-left
+        x1, y0, 1.0, 1.0, r, g, b, depth,  # Bottom-right
+        x1, y0, 1.0, 1.0, r, g, b, depth,  # Bottom-right
+        x0, y1, 0.0, 0.0, r, g, b, depth,  # Top-left
+        x1, y1, 1.0, 0.0, r, g, b, depth,  # Top-right
+    ], dtype=np.float32).reshape((-1, 8))
+    
+    renderer.draw_arrays(verts, tex_id, use_tex=True)
 
 # ---------- Spiller tilstand ----------
 current_weapon = WEAPON_PISTOL
@@ -63,6 +150,42 @@ player_score = 0
 
 # Sau system
 sau_count = 5  # Begrenset til 5 sauer - hver sau gjør 2 skade
+
+# ---------- Highscore system ----------
+def load_highscores() -> list[dict]:
+    """Laster highscores fra fil."""
+    try:
+        if os.path.exists("highscores.json"):
+            with open("highscores.json", "r") as f:
+                return json.load(f)
+    except:
+        pass
+    return []
+
+def save_highscores(highscores: list[dict]) -> None:
+    """Lagrer highscores til fil."""
+    try:
+        with open("highscores.json", "w") as f:
+            json.dump(highscores, f, indent=2)
+    except:
+        pass
+
+def is_highscore(score: int) -> bool:
+    """Sjekker om score er en highscore."""
+    highscores = load_highscores()
+    if len(highscores) < 10:  # Mindre enn 10 highscores
+        return True
+    return score > min(hs["score"] for hs in highscores)
+
+def add_highscore(name: str, score: int) -> None:
+    """Legger til en ny highscore."""
+    highscores = load_highscores()
+    highscores.append({"name": name, "score": score})
+    # Sorter etter score (høyest først)
+    highscores.sort(key=lambda x: x["score"], reverse=True)
+    # Behold kun top 10
+    highscores = highscores[:10]
+    save_highscores(highscores)
 
 # ---------- Hjelpere ----------
 # ---------- Prosedural tekstur (pygame.Surface) ----------
@@ -224,7 +347,7 @@ def make_enemy_texture() -> pygame.Surface:
     pygame.draw.circle(s, (220, 200, 180, 255), (128, 70), 26)
     # hjelm-ish
     pygame.draw.arc(s, (40, 40, 50, 255), (92, 40, 72, 40), 3.14, 0, 6)
-    # “arm”
+    # "arm"
     pygame.draw.rect(s, (60, 60, 70, 255), (86, 110, 24, 16))
     pygame.draw.rect(s, (60, 60, 70, 255), (146, 110, 24, 16))
     return s
@@ -958,6 +1081,85 @@ def build_sau_count_display() -> np.ndarray:
     
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
+def get_player_name_input(renderer) -> str:
+    """Henter navn fra spilleren via tastatur."""
+    name = ""
+    max_length = 15
+    
+
+    
+    print("Skriv inn ditt navn (maks 15 tegn):")
+    print("Trykk ENTER for å bekrefte, ESC for å avbryte")
+    
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return name
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_RETURN and name.strip():
+                    print(f"Navn bekreftet: {name}")
+                    return name.strip()
+                elif event.key == pygame.K_BACKSPACE:
+                    name = name[:-1]
+                    print(f"Navn: {name}_")
+                elif event.key == pygame.K_ESCAPE:
+                    print("Avbrutt")
+                    return name
+                elif len(name) < max_length:
+                    # Kun tillat bokstaver, tall og mellomrom
+                    if event.unicode.isalnum() or event.unicode == ' ':
+                        name += event.unicode
+                        print(f"Navn: {name}_")
+        
+        # Render input screen
+        gl.glViewport(0, 0, WIDTH, HEIGHT)
+        gl.glClearColor(0.0, 0.0, 0.0, 1.0)
+        gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+        
+        # Input boks
+        input_width = 400
+        input_height = 50
+        x = (WIDTH - input_width) // 2
+        y = HEIGHT // 2
+        
+        x0 = (2.0 * x) / WIDTH - 1.0
+        x1 = (2.0 * (x + input_width)) / WIDTH - 1.0
+        y0 = 1.0 - 2.0 * (y / HEIGHT)
+        y1 = 1.0 - 2.0 * ((y + input_height) / HEIGHT)
+        
+        # Hvit farge for input boks
+        r, g, b = 1.0, 1.0, 1.0
+        depth = 0.0
+        
+        input_verts = [
+            x0, y0, 0.0, 0.0, r, g, b, depth,
+            x0, y1, 0.0, 1.0, r, g, b, depth,
+            x1, y0, 1.0, 0.0, r, g, b, depth,
+            x1, y0, 1.0, 0.0, r, g, b, depth,
+            x0, y1, 0.0, 1.0, r, g, b, depth,
+            x1, y1, 1.0, 1.0, r, g, b, depth,
+        ]
+        
+        input_array = np.asarray(input_verts, dtype=np.float32).reshape((-1, 8))
+        renderer.draw_arrays(input_array, renderer.white_tex, use_tex=False)
+        
+        # Render tekst via OpenGL
+        draw_text_px(renderer, "Skriv inn ditt navn:", WIDTH//2 - 180, HEIGHT//2 - 50, size=36, color=(255, 255, 255))
+        
+        # Render navn med cursor
+        if len(name) == 0:
+            name_display = "_"
+        else:
+            name_display = name + "_"
+        draw_text_px(renderer, name_display, WIDTH//2 - 100, HEIGHT//2, size=36, color=(0, 0, 0))
+        
+        # Render instruksjoner
+        draw_text_px(renderer, "ENTER = bekreft, ESC = avbryt", WIDTH//2 - 230, HEIGHT//2 + 50, size=24, color=(200, 200, 200))
+        
+        pygame.display.flip()
+        
+        pygame.time.wait(16)
+
 def build_damage_flash() -> np.ndarray:
     """Bygger rød flash-effekt når spilleren tar skade."""
     global player_damage_flash_time
@@ -1038,11 +1240,95 @@ def build_enemy_spawn_countdown(enemies_spawned: bool, enemy_spawn_timer: float,
     
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
+def show_highscores_screen(renderer, final_score: int) -> None:
+    """Viser highscores og lar spilleren skrive navn hvis det er en highscore."""
+    highscores = load_highscores()
+    
+
+    
+    # Sjekk om dette er en highscore
+    if is_highscore(final_score):
+        print(f"🎉 NY HIGHSCORE! Score: {final_score}")
+        
+        # Hent navn fra spilleren
+        player_name = get_player_name_input(renderer)
+        if not player_name.strip():
+            player_name = "Anonymous"  # Default navn hvis ingen input
+        add_highscore(player_name, final_score)
+        print(f"Highscore lagret for {player_name}!")
+    
+    # Vis highscores
+    print("\n=== HIGHSCORES ===")
+    for i, hs in enumerate(highscores[:10], 1):
+        print(f"{i:2d}. {hs['name']:<15} {hs['score']:>6}")
+    
+    print("\nTrykk ESC for å avslutte...")
+    
+    # Vis highscores skjerm i 5 sekunder
+    start_time = pygame.time.get_ticks()
+    while pygame.time.get_ticks() - start_time < 5000:  # 5 sekunder
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                return
+        
+        # Render highscores overlay
+        gl.glViewport(0, 0, WIDTH, HEIGHT)
+        gl.glClearColor(0.0, 0.0, 0.0, 1.0)
+        gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+        
+        # Highscores boks
+        hs_width = 500
+        hs_height = 400
+        x = (WIDTH - hs_width) // 2
+        y = (HEIGHT - hs_height) // 2
+        
+        x0 = (2.0 * x) / WIDTH - 1.0
+        x1 = (2.0 * (x + hs_width)) / WIDTH - 1.0
+        y0 = 1.0 - 2.0 * (y / HEIGHT)
+        y1 = 1.0 - 2.0 * ((y + hs_height) / HEIGHT)
+        
+        # Gul farge for highscores boks
+        r, g, b = 1.0, 1.0, 0.0
+        depth = 0.0
+        
+        hs_verts = [
+            x0, y0, 0.0, 0.0, r, g, b, depth,
+            x0, y1, 0.0, 1.0, r, g, b, depth,
+            x1, y0, 1.0, 0.0, r, g, b, depth,
+            x1, y0, 1.0, 0.0, r, g, b, depth,
+            x0, y1, 0.0, 1.0, r, g, b, depth,
+            x1, y1, 1.0, 1.0, r, g, b, depth,
+        ]
+        
+        hs_array = np.asarray(hs_verts, dtype=np.float32).reshape((-1, 8))
+        renderer.draw_arrays(hs_array, renderer.white_tex, use_tex=False)
+        
+        # Render tekst via OpenGL
+        draw_text_px(renderer, "HIGHSCORES", WIDTH//2 - 100, y + 30, size=48, color=(0, 0, 0))
+        
+        # Render highscores
+        y_offset = y + 80
+        for i, hs in enumerate(highscores[:10], 1):
+            score_text = f"{i:2d}. {hs['name']:<15} {hs['score']:>6}"
+            draw_text_px(renderer, score_text, x + 20, y_offset, size=24, color=(0, 0, 0))
+            y_offset += 25
+        
+        # Render instruksjoner
+        draw_text_px(renderer, "Trykk ESC for å avslutte", WIDTH//2 - 120, y + hs_height - 30, size=24, color=(0, 0, 0))
+        
+        pygame.display.flip()
+        
+        pygame.time.wait(16)
+
 def show_game_over_screen(renderer, final_score: int) -> None:
     """Viser Game Over skjerm med final score."""
     print("=== GAME OVER ===")
     print(f"Final Score: {final_score}")
     print("Trykk ESC for å avslutte...")
+    
+
     
     # Vis Game Over skjerm i 3 sekunder
     start_time = pygame.time.get_ticks()
@@ -1085,7 +1371,12 @@ def show_game_over_screen(renderer, final_score: int) -> None:
         go_array = np.asarray(go_verts, dtype=np.float32).reshape((-1, 8))
         renderer.draw_arrays(go_array, renderer.white_tex, use_tex=False)
         
+        # Render tekst via OpenGL
+        draw_text_px(renderer, "GAME OVER", WIDTH//2 - 200, HEIGHT//2, size=72, color=(255, 255, 255))
+        draw_text_px(renderer, f"Final Score: {final_score}", WIDTH//2 - 150, HEIGHT//2 + 60, size=36, color=(255, 255, 255))
+        
         pygame.display.flip()
+        
         pygame.time.wait(16)  # ~60 FPS
 
 def build_minimap_quads() -> np.ndarray:
@@ -1495,7 +1786,7 @@ def main() -> None:
                     # Sjekk om spilleren dør
                     if player_hp <= 0:
                         print(f"GAME OVER - Spilleren døde! Final Score: {player_score}")
-                        show_game_over_screen(renderer, player_score)
+                        show_highscores_screen(renderer, player_score)
                         running = False
         
         # Oppdater invulnerability timer
@@ -1505,6 +1796,12 @@ def main() -> None:
         # Oppdater damage flash timer
         if player_damage_flash_time > 0.0:
             player_damage_flash_time -= dt
+
+        # Sjekk om spilleren har vunnet (drept alle fiender)
+        if enemies_spawned and all(not e.alive for e in enemies):
+            print(f"🎉 VICTORY! Alle fiender drept! Final Score: {player_score}")
+            show_highscores_screen(renderer, player_score)
+            running = False
 
         # ---------- Render ----------
         gl.glViewport(0, 0, WIDTH, HEIGHT)
