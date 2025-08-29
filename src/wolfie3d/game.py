@@ -150,6 +150,10 @@ player_score = 0
 
 # Sau system
 sau_count = 5  # Begrenset til 5 sauer - hver sau gjør 2 skade
+active_sau = None  # Aktive sau som kan eksplodere
+explosion_time = 0.0  # Tid for eksplosjons-effekt
+explosion_x = 0.0  # X-posisjon for eksplosjon
+explosion_y = 0.0  # Y-posisjon for eksplosjon
 
 # ---------- Highscore system ----------
 def load_highscores() -> list[dict]:
@@ -719,7 +723,11 @@ def build_sprites_batch(bullets: list[Bullet | SauBullet]) -> np.ndarray:
         # Depth (basert på trans_y)
         depth = clamp01(trans_y / FAR_PLANE)
 
-        r = g = bcol = 1.0  # ingen ekstra farge-dim
+        # Farge - rød hvis sau er aktiv (kan eksplodere)
+        if isinstance(b, SauBullet) and active_sau == b:
+            r, g, bcol = 1.0, 0.3, 0.3  # Rød farge for aktiv sau
+        else:
+            r = g = bcol = 1.0  # ingen ekstra farge-dim
         
         # Teksturkoordinater - flip for sauen
         if isinstance(b, SauBullet):
@@ -1053,7 +1061,7 @@ def build_score_display() -> np.ndarray:
 
 def build_sau_count_display() -> np.ndarray:
     """Viser antall sauer igjen øverst til høyre."""
-    global sau_count
+    global sau_count, active_sau
     
     # Sau-teller boks
     bar_width = 80
@@ -1066,8 +1074,11 @@ def build_sau_count_display() -> np.ndarray:
     y0 = 1.0 - 2.0 * (y / HEIGHT)
     y1 = 1.0 - 2.0 * ((y + bar_height) / HEIGHT)
     
-    # Hvit farge for sau-teller
-    r, g, b = 1.0, 1.0, 1.0
+    # Farge - rød hvis sau er aktiv, ellers hvit
+    if active_sau and active_sau.alive:
+        r, g, b = 1.0, 0.3, 0.3  # Rød farge for aktiv sau
+    else:
+        r, g, b = 1.0, 1.0, 1.0  # Hvit farge for normal
     depth = 0.0
     
     verts = [
@@ -1503,6 +1514,71 @@ def build_explosion_particles(enemies: list['Enemy']) -> np.ndarray:
         return np.zeros((0, 8), dtype=np.float32)
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
+def build_sau_explosion_effect() -> np.ndarray:
+    """Bygger eksplosjons-effekt for sau-eksplosjon."""
+    global explosion_time, explosion_x, explosion_y
+    
+    if explosion_time <= 0.0:
+        return np.zeros((0, 8), dtype=np.float32)
+    
+    verts: list[float] = []
+    
+    # Beregn progress av eksplosjonen (1.0 til 0.0)
+    explosion_progress = explosion_time / 0.3
+    
+    # Transform eksplosjon til skjermkoordinater
+    spr_x = explosion_x - player_x
+    spr_y = explosion_y - player_y
+    inv_det = 1.0 / (plane_x * dir_y - dir_x * plane_y + 1e-9)
+    trans_x = inv_det * (dir_y * spr_x - dir_x * spr_y)
+    trans_y = inv_det * (-plane_y * spr_x + plane_x * spr_y)
+    if trans_y <= 0:
+        return np.zeros((0, 8), dtype=np.float32)
+
+    explosion_screen_x = int((WIDTH / 2) * (1 + trans_x / trans_y))
+    explosion_screen_y = HALF_H
+    
+    # Eksplosjons-størrelse (vokser over tid)
+    explosion_size = int(50 * (1.0 - explosion_progress))
+    
+    # Klipp eksplosjon hvis den går utenfor skjerm
+    if (explosion_screen_x - explosion_size < 0 or 
+        explosion_screen_x + explosion_size >= WIDTH or
+        explosion_screen_y - explosion_size < 0 or 
+        explosion_screen_y + explosion_size >= HEIGHT):
+        return np.zeros((0, 8), dtype=np.float32)
+    
+    # Konverter til NDC
+    x0 = (2.0 * (explosion_screen_x - explosion_size)) / WIDTH - 1.0
+    x1 = (2.0 * (explosion_screen_x + explosion_size)) / WIDTH - 1.0
+    y0 = 1.0 - 2.0 * ((explosion_screen_y - explosion_size) / HEIGHT)
+    y1 = 1.0 - 2.0 * ((explosion_screen_y + explosion_size) / HEIGHT)
+    
+    # Depth (samme som eksplosjonen)
+    depth = clamp01(trans_y / FAR_PLANE)
+    
+    # Eksplosjonsfarge - går fra hvit til gul til oransje
+    if explosion_progress > 0.7:
+        # Første tredjedel: hvit
+        r, g, b = 1.0, 1.0, 1.0
+    elif explosion_progress > 0.3:
+        # Andre tredjedel: gul
+        r, g, b = 1.0, 1.0, 0.0
+    else:
+        # Siste tredjedel: oransje
+        r, g, b = 1.0, 0.5, 0.0
+    
+    verts.extend([
+        x0, y0, 0.0, 0.0, r, g, b, depth,
+        x0, y1, 0.0, 1.0, r, g, b, depth,
+        x1, y0, 1.0, 0.0, r, g, b, depth,
+        x1, y0, 1.0, 0.0, r, g, b, depth,
+        x0, y1, 0.0, 1.0, r, g, b, depth,
+        x1, y1, 1.0, 1.0, r, g, b, depth,
+    ])
+    
+    return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
+
 def build_enemy_hp_bars(enemies: list['Enemy']) -> np.ndarray:
     """
     Bygger HP-balker som vises over fiendene.
@@ -1617,7 +1693,7 @@ def try_move_player(nx: float, ny: float) -> tuple[float, float]:
 
 # ---------- Main ----------
 def main() -> None:
-    global current_weapon, player_hp, player_invulnerable_time, player_score, sau_count, player_x, player_y, dir_x, dir_y, plane_x, plane_y, player_damage_flash_time
+    global current_weapon, player_hp, player_invulnerable_time, player_score, sau_count, active_sau, explosion_time, explosion_x, explosion_y, player_x, player_y, dir_x, dir_y, plane_x, plane_y, player_damage_flash_time
     pygame.init()
     pygame.display.set_caption("Vibe Wolf (OpenGL)")
 
@@ -1666,7 +1742,64 @@ def main() -> None:
                 if event.key == pygame.K_ESCAPE:
                     running = False
                 if event.key == pygame.K_SPACE:
-                    # Skyt basert på valgt våpen
+                    # Sjekk først om vi har en aktiv sau som kan eksplodere
+                    if active_sau and active_sau.alive:
+                        # Eksploder sauen
+                        explosion_x = active_sau.x
+                        explosion_y = active_sau.y
+                        explosion_time = 0.3  # 0.3 sekunder eksplosjons-effekt
+                        killed_enemies = active_sau.explode(enemies)
+                        player_score += len(killed_enemies) * 100  # +100 poeng per fiende drept av eksplosjon
+                        active_sau = None  # Fjern aktiv sau
+                        print(f"💥 Eksplosjon! {len(killed_enemies)} fiender drept!")
+                        firing = True
+                        recoil_t = 0.0
+                    else:
+                        # Skyt basert på valgt våpen
+                        if current_weapon == WEAPON_PISTOL:
+                            # Pistol - raskere, svakere kuler
+                            bx = player_x + dir_x * 0.4
+                            by = player_y + dir_y * 0.4
+                            bvx = dir_x * 12.0  # Raskere
+                            bvy = dir_y * 12.0
+                            bullets.append(Bullet(bx, by, bvx, bvy))
+                        else:  # WEAPON_SAU
+                            # Sau - send sau som prosjektil (kun hvis det er sauer igjen)
+                            if sau_count > 0:
+                                bx = player_x + dir_x * 0.4
+                                by = player_y + dir_y * 0.4
+                                bvx = dir_x * 6.0   # Tregere
+                                bvy = dir_y * 6.0
+                                new_sau = SauBullet(bx, by, bvx, bvy)
+                                bullets.append(new_sau)
+                                active_sau = new_sau  # Sett den nye sauen som aktiv
+                                sau_count -= 1  # Bruk en sau
+                                print(f"Sau skutt! {sau_count} sauer igjen")
+                            else:
+                                print("Ingen sauer igjen!")
+                        firing = True
+                        recoil_t = 0.0
+                if event.key == pygame.K_1:
+                    current_weapon = WEAPON_PISTOL
+                    print("Våpen 1 (Pistol) valgt")
+                if event.key == pygame.K_2:
+                    current_weapon = WEAPON_SAU
+                    print("Våpen 2 (Sau) valgt")
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                # Sjekk først om vi har en aktiv sau som kan eksplodere
+                if active_sau and active_sau.alive:
+                    # Eksploder sauen
+                    explosion_x = active_sau.x
+                    explosion_y = active_sau.y
+                    explosion_time = 0.3  # 0.3 sekunder eksplosjons-effekt
+                    killed_enemies = active_sau.explode(enemies)
+                    player_score += len(killed_enemies) * 100  # +100 poeng per fiende drept av eksplosjon
+                    active_sau = None  # Fjern aktiv sau
+                    print(f"💥 Eksplosjon! {len(killed_enemies)} fiender drept!")
+                    firing = True
+                    recoil_t = 0.0
+                else:
+                    # Skyt basert på valgt våpen (samme som SPACE)
                     if current_weapon == WEAPON_PISTOL:
                         # Pistol - raskere, svakere kuler
                         bx = player_x + dir_x * 0.4
@@ -1681,42 +1814,15 @@ def main() -> None:
                             by = player_y + dir_y * 0.4
                             bvx = dir_x * 6.0   # Tregere
                             bvy = dir_y * 6.0
-                            bullets.append(SauBullet(bx, by, bvx, bvy))
+                            new_sau = SauBullet(bx, by, bvx, bvy)
+                            bullets.append(new_sau)
+                            active_sau = new_sau  # Sett den nye sauen som aktiv
                             sau_count -= 1  # Bruk en sau
                             print(f"Sau skutt! {sau_count} sauer igjen")
                         else:
                             print("Ingen sauer igjen!")
                     firing = True
                     recoil_t = 0.0
-                if event.key == pygame.K_1:
-                    current_weapon = WEAPON_PISTOL
-                    print("Våpen 1 (Pistol) valgt")
-                if event.key == pygame.K_2:
-                    current_weapon = WEAPON_SAU
-                    print("Våpen 2 (Sau) valgt")
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                # Skyt basert på valgt våpen (samme som SPACE)
-                if current_weapon == WEAPON_PISTOL:
-                    # Pistol - raskere, svakere kuler
-                    bx = player_x + dir_x * 0.4
-                    by = player_y + dir_y * 0.4
-                    bvx = dir_x * 12.0  # Raskere
-                    bvy = dir_y * 12.0
-                    bullets.append(Bullet(bx, by, bvx, bvy))
-                else:  # WEAPON_SAU
-                    # Sau - send sau som prosjektil (kun hvis det er sauer igjen)
-                    if sau_count > 0:
-                        bx = player_x + dir_x * 0.4
-                        by = player_y + dir_y * 0.4
-                        bvx = dir_x * 6.0   # Tregere
-                        bvy = dir_y * 6.0
-                        bullets.append(SauBullet(bx, by, bvx, bvy))
-                        sau_count -= 1  # Bruk en sau
-                        print(f"Sau skutt! {sau_count} sauer igjen")
-                    else:
-                        print("Ingen sauer igjen!")
-                firing = True
-                recoil_t = 0.0
 
         # Handle input using the new module
         new_player_x, new_player_y, new_dir_x, new_dir_y, new_plane_x, new_plane_y = handle_input(
@@ -1749,19 +1855,29 @@ def main() -> None:
                 dx = e.x - b.x
                 dy = e.y - b.y
                 if dx * dx + dy * dy <= (e.radius * e.radius):
-                    # Sau gjør 2 skade, kuler gjør 1 skade
-                    damage = 2 if isinstance(b, SauBullet) else 1
-                    e.hp -= damage
-                    b.alive = False  # kula/sauen forbrukes
-                    if e.hp <= 0:
-                        e.is_dying = True  # Start dødsanimasjon
-                        e.death_time = 0.0
-                        player_score += 100  # +100 poeng per fiende drept
-                        print(f"Fiende drept! HP: {e.hp}/{e.max_hp} | Score: {player_score}")
+                    if isinstance(b, SauBullet):
+                        # Sau bouncer bort fra fienden
+                        b.bounce(e.x, e.y)
+                        active_sau = b  # Sett denne sauen som aktiv for eksplosjon
+                        break
                     else:
-                        print(f"Fiende skadet! HP: {e.hp}/{e.max_hp}")
-                    break
+                        # Vanlig kule gjør skade
+                        damage = 1
+                        e.hp -= damage
+                        b.alive = False  # kula forbrukes
+                        if e.hp <= 0:
+                            e.is_dying = True  # Start dødsanimasjon
+                            e.death_time = 0.0
+                            player_score += 100  # +100 poeng per fiende drept
+                            print(f"Fiende drept! HP: {e.hp}/{e.max_hp} | Score: {player_score}")
+                        else:
+                            print(f"Fiende skadet! HP: {e.hp}/{e.max_hp}")
+                        break
         bullets = [b for b in bullets if b.alive]
+        
+        # Fjern aktiv sau hvis den ikke lenger er alive
+        if active_sau and not active_sau.alive:
+            active_sau = None
 
         # Oppdater fiender og sjekk spiller-skade
         for e in enemies:
@@ -1796,6 +1912,10 @@ def main() -> None:
         # Oppdater damage flash timer
         if player_damage_flash_time > 0.0:
             player_damage_flash_time -= dt
+            
+        # Oppdater eksplosjons timer
+        if explosion_time > 0.0:
+            explosion_time -= dt
 
         # Sjekk om spilleren har vunnet (drept alle fiender)
         if enemies_spawned and all(not e.alive for e in enemies):
@@ -1848,6 +1968,11 @@ def main() -> None:
         explosion_particles = build_explosion_particles(enemies)
         if explosion_particles.size:
             renderer.draw_arrays(explosion_particles, renderer.white_tex, use_tex=False)
+            
+        # Sau eksplosjons-effekt
+        sau_explosion = build_sau_explosion_effect()
+        if sau_explosion.size:
+            renderer.draw_arrays(sau_explosion, renderer.white_tex, use_tex=False)
 
         # Enemy HP bars (må tegnes etter fiendene, men før UI-elementer)
         enemy_hp_bars = build_enemy_hp_bars(enemies)
@@ -1899,13 +2024,19 @@ def main() -> None:
         # Score display
         score_display = build_score_display()
         renderer.draw_arrays(score_display, renderer.white_tex, use_tex=False)
+        
+        # Render score text
+        draw_text_px(renderer, f"Score: {player_score}", WIDTH - 125, 55, size=20, color=(0, 0, 0))
 
         # Sau count display
         sau_count_display = build_sau_count_display()
         renderer.draw_arrays(sau_count_display, renderer.white_tex, use_tex=False)
         
         # Render sheep count text
-        draw_text_px(renderer, f"Sauer: {sau_count}", WIDTH - 85, 90, size=20, color=(0, 0, 0))
+        if active_sau and active_sau.alive:
+            draw_text_px(renderer, f"Sau: EKSPLODER!", WIDTH - 85, 90, size=20, color=(255, 0, 0))
+        else:
+            draw_text_px(renderer, f"Sauer: {sau_count}", WIDTH - 85, 90, size=20, color=(0, 0, 0))
 
         # Enemy spawn countdown (kun hvis fiendene ikke har spawnet ennå)
         countdown_display = build_enemy_spawn_countdown(enemies_spawned, enemy_spawn_timer, enemy_spawn_delay)
