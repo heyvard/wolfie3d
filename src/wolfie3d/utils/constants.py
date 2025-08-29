@@ -64,5 +64,5 @@ PLAYER_START_PLANE_X = 0.0
 PLAYER_START_PLANE_Y = PLANE_LEN
 
 # Spiller HP
-PLAYER_MAX_HP = 100
+PLAYER_MAX_HP = 150  # Økt fra 100 til 150
 PLAYER_INVULNERABLE_TIME = 0.5  # Sekunder hvor spilleren ikke kan ta skade

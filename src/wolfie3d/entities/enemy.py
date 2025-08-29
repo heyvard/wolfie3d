@@ -38,6 +38,7 @@ class Enemy:
         self.animation_frame = 0   # Hvilken frame vi er på
         self.death_time = 0.0      # For dødsanimasjon
         self.is_dying = False      # Er fienden i dødsanimasjon?
+        self.last_damage_time = 0.0  # Tid da fienden sist skadet spilleren
 
     def _try_move(self, nx: float, ny: float) -> None:
         # enkel vegg-kollisjon (sirkulær hitbox mot grid)
@@ -55,7 +56,7 @@ class Enemy:
         # Håndter dødsanimasjon
         if self.is_dying:
             self.death_time += dt
-            if self.death_time > 1.0:  # Dødsanimasjon varer 1 sekund
+            if self.death_time > 0.3:  # Dødsanimasjon varer 0.3 sekunder (raskere)
                 self.alive = False
                 return
         

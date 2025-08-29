@@ -56,6 +56,7 @@ plane_x, plane_y = PLAYER_START_PLANE_X, PLAYER_START_PLANE_Y
 player_hp = PLAYER_MAX_HP
 player_max_hp = PLAYER_MAX_HP
 player_invulnerable_time = 0.0  # Tid hvor spilleren ikke kan ta skade
+player_damage_flash_time = 0.0  # Tid for rød flash-effekt når spilleren tar skade
 
 # Score system
 player_score = 0
@@ -628,6 +629,18 @@ def build_enemies_batch(enemies: list['Enemy']) -> np.ndarray:
     for e in enemies:
         if not e.alive:
             continue
+            
+        # Håndter dødsanimasjon - synkende effekt
+        death_scale = 1.0
+        death_offset = 0
+        if e.is_dying:
+            # Beregn progress av dødsanimasjon (0.0 til 1.0)
+            death_progress = min(1.0, e.death_time / 0.3)
+            # Synk ned i bakken (øk v_shift)
+            death_offset = int(death_progress * 50)  # Synk 50 piksler
+            # Krymp fienden (scale ned)
+            death_scale = 1.0 - death_progress * 0.5  # Krymp til 50% størrelse
+        
         spr_x = e.x - player_x
         spr_y = e.y - player_y
         inv_det = 1.0 / (plane_x * dir_y - dir_x * plane_y + 1e-9)
@@ -639,7 +652,12 @@ def build_enemies_batch(enemies: list['Enemy']) -> np.ndarray:
         sprite_screen_x = int((WIDTH / 2) * (1 + trans_x / trans_y))
         sprite_h = abs(int(HEIGHT / trans_y))
         sprite_w = sprite_h  # kvadratisk
-        v_shift = int((0.5 - e.height_param) * sprite_h)
+        
+        # Bruk death_scale for å krympe fienden under dødsanimasjon
+        sprite_h = int(sprite_h * death_scale)
+        sprite_w = int(sprite_w * death_scale)
+        
+        v_shift = int((0.5 - e.height_param) * sprite_h) + death_offset
 
         draw_start_y = max(0, -sprite_h // 2 + HALF_H + v_shift)
         draw_end_y   = min(HEIGHT - 1, draw_start_y + sprite_h)
@@ -657,7 +675,19 @@ def build_enemies_batch(enemies: list['Enemy']) -> np.ndarray:
         y1 = 1.0 - 2.0 * (draw_end_y   / HEIGHT)
 
         depth = clamp01(trans_y / FAR_PLANE)
-        r = g = b = 1.0
+        
+        # Farge - rød/oransje under dødsanimasjon
+        if e.is_dying:
+            # Eksplosjonsfarge - går fra rød til oransje
+            death_progress = min(1.0, e.death_time / 0.3)
+            if death_progress < 0.5:
+                # Første halvdel: rød
+                r, g, b = 1.0, 0.0, 0.0
+            else:
+                # Andre halvdel: oransje
+                r, g, b = 1.0, 0.5, 0.0
+        else:
+            r = g = b = 1.0
 
         ENEMY_V_FLIP = True  # sett False hvis den blir riktig uten flip
         if ENEMY_V_FLIP:
@@ -928,6 +958,86 @@ def build_sau_count_display() -> np.ndarray:
     
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
+def build_damage_flash() -> np.ndarray:
+    """Bygger rød flash-effekt når spilleren tar skade."""
+    global player_damage_flash_time
+    
+    if player_damage_flash_time <= 0.0:
+        return np.zeros((0, 8), dtype=np.float32)
+    
+    # Flash-effekt som dekker hele skjermen
+    # Intensitet avtar over tid
+    flash_intensity = min(0.7, player_damage_flash_time / 0.15)  # 0.15 sekunder flash, maks 70% intensitet
+    
+    # Rød farge med alpha-effekt
+    r, g, b = flash_intensity, 0.0, 0.0
+    depth = 0.0  # Helt foran
+    
+    # Fullskjerm quad
+    verts = [
+        -1.0, -1.0, 0.0, 0.0, r, g, b, depth,  # Bottom-left
+        -1.0,  1.0, 0.0, 1.0, r, g, b, depth,  # Top-left
+         1.0, -1.0, 1.0, 0.0, r, g, b, depth,  # Bottom-right
+         1.0, -1.0, 1.0, 0.0, r, g, b, depth,  # Bottom-right
+        -1.0,  1.0, 0.0, 1.0, r, g, b, depth,  # Top-left
+         1.0,  1.0, 1.0, 1.0, r, g, b, depth,  # Top-right
+    ]
+    
+    return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
+
+def build_enemy_spawn_countdown(enemies_spawned: bool, enemy_spawn_timer: float, enemy_spawn_delay: float) -> np.ndarray:
+    """Viser nedtelling til fiendene spawner (kun hvis de ikke har spawnet ennå)."""
+    
+    if enemies_spawned:
+        return np.zeros((0, 8), dtype=np.float32)
+    
+    # Countdown boks
+    bar_width = 200
+    bar_height = 30
+    x = (WIDTH - bar_width) // 2  # Sentrert
+    y = HEIGHT - 100  # Nær bunnen
+    
+    # Beregn progress bar basert på tid
+    progress = min(1.0, enemy_spawn_timer / enemy_spawn_delay)
+    progress_width = int(bar_width * progress)
+    
+    x0 = (2.0 * x) / WIDTH - 1.0
+    x1 = (2.0 * (x + bar_width)) / WIDTH - 1.0
+    y0 = 1.0 - 2.0 * (y / HEIGHT)
+    y1 = 1.0 - 2.0 * ((y + bar_height) / HEIGHT)
+    
+    # Bakgrunn (mørk oransje)
+    bg_r, bg_g, bg_b = 0.3, 0.15, 0.0
+    depth = 0.0
+    
+    verts = []
+    
+    # Bakgrunn
+    verts.extend([
+        x0, y0, 0.0, 0.0, bg_r, bg_g, bg_b, depth,
+        x0, y1, 0.0, 1.0, bg_r, bg_g, bg_b, depth,
+        x1, y0, 1.0, 0.0, bg_r, bg_g, bg_b, depth,
+        x1, y0, 1.0, 0.0, bg_r, bg_g, bg_b, depth,
+        x0, y1, 0.0, 1.0, bg_r, bg_g, bg_b, depth,
+        x1, y1, 1.0, 1.0, bg_r, bg_g, bg_b, depth,
+    ])
+    
+    # Progress bar (lys oransje)
+    if progress > 0.0:
+        progress_x1 = (2.0 * (x + progress_width)) / WIDTH - 1.0
+        progress_r, progress_g, progress_b = 1.0, 0.5, 0.0
+        
+        verts.extend([
+            x0, y0, 0.0, 0.0, progress_r, progress_g, progress_b, depth,
+            x0, y1, 0.0, 1.0, progress_r, progress_g, progress_b, depth,
+            progress_x1, y0, 1.0, 0.0, progress_r, progress_g, progress_b, depth,
+            progress_x1, y0, 1.0, 0.0, progress_r, progress_g, progress_b, depth,
+            x0, y1, 0.0, 1.0, progress_r, progress_g, progress_b, depth,
+            progress_x1, y1, 1.0, 1.0, progress_r, progress_g, progress_b, depth,
+        ])
+    
+    return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
+
 def show_game_over_screen(renderer, final_score: int) -> None:
     """Viser Game Over skjerm med final score."""
     print("=== GAME OVER ===")
@@ -1023,6 +1133,83 @@ def build_minimap_quads() -> np.ndarray:
     # for enkelhet: bare en liten boks på enden
     add_quad_px(pad + fx - 1, pad + fy - 1, 2, 2, (1.0, 0.3, 0.3), 0.0)
 
+    return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
+
+def build_explosion_particles(enemies: list['Enemy']) -> np.ndarray:
+    """Bygger eksplosjonspartikler for døende fiender."""
+    verts: list[float] = []
+    
+    for e in enemies:
+        if not e.is_dying or e.death_time > 0.3:
+            continue
+            
+        # Beregn progress av dødsanimasjon
+        death_progress = min(1.0, e.death_time / 0.3)
+        
+        # Transform fiende til skjermkoordinater
+        spr_x = e.x - player_x
+        spr_y = e.y - player_y
+        inv_det = 1.0 / (plane_x * dir_y - dir_x * plane_y + 1e-9)
+        trans_x = inv_det * (dir_y * spr_x - dir_x * spr_y)
+        trans_y = inv_det * (-plane_y * spr_x + plane_x * spr_y)
+        if trans_y <= 0:
+            continue
+
+        sprite_screen_x = int((WIDTH / 2) * (1 + trans_x / trans_y))
+        sprite_h = abs(int(HEIGHT / trans_y))
+        sprite_w = sprite_h
+        
+        # Beregn fiendens Y-posisjon på skjermen
+        v_shift = int((0.5 - e.height_param) * sprite_h)
+        sprite_screen_y = HALF_H + v_shift
+        
+        # Partikkel-posisjon (rundt fienden)
+        particle_count = 12  # Flere partikler for mer effekt
+        for i in range(particle_count):
+            # Beregn partikkel-posisjon i sirkel rundt fienden
+            angle = (i / particle_count) * 2 * math.pi
+            radius = 15 + death_progress * 40  # Partiklene sprer seg mer utover
+            px = sprite_screen_x + int(radius * math.cos(angle))
+            py = sprite_screen_y + int(radius * math.sin(angle))
+            
+            # Partikkel-størrelse (krymper over tid)
+            particle_size = max(3, int(10 * (1.0 - death_progress)))
+            
+            # Klipp partikkel hvis den går utenfor skjerm
+            if px < 0 or px >= WIDTH or py < 0 or py >= HEIGHT:
+                continue
+                
+            # Konverter til NDC
+            x0 = (2.0 * (px - particle_size)) / WIDTH - 1.0
+            x1 = (2.0 * (px + particle_size)) / WIDTH - 1.0
+            y0 = 1.0 - 2.0 * ((py - particle_size) / HEIGHT)
+            y1 = 1.0 - 2.0 * ((py + particle_size) / HEIGHT)
+            
+            # Depth (samme som fienden)
+            depth = clamp01(trans_y / FAR_PLANE)
+            
+            # Partikkelfarge - går fra hvit til gul til rød
+            if death_progress < 0.3:
+                # Første tredjedel: hvit
+                r, g, b = 1.0, 1.0, 1.0
+            elif death_progress < 0.7:
+                # Andre tredjedel: gul
+                r, g, b = 1.0, 1.0, 0.0
+            else:
+                # Siste tredjedel: rød
+                r, g, b = 1.0, 0.0, 0.0
+            
+            verts.extend([
+                x0, y0, 0.0, 0.0, r, g, b, depth,
+                x0, y1, 0.0, 1.0, r, g, b, depth,
+                x1, y0, 1.0, 0.0, r, g, b, depth,
+                x1, y0, 1.0, 0.0, r, g, b, depth,
+                x0, y1, 0.0, 1.0, r, g, b, depth,
+                x1, y1, 1.0, 1.0, r, g, b, depth,
+            ])
+    
+    if not verts:
+        return np.zeros((0, 8), dtype=np.float32)
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
 def build_enemy_hp_bars(enemies: list['Enemy']) -> np.ndarray:
@@ -1139,7 +1326,7 @@ def try_move_player(nx: float, ny: float) -> tuple[float, float]:
 
 # ---------- Main ----------
 def main() -> None:
-    global current_weapon, player_hp, player_invulnerable_time, player_score, sau_count, player_x, player_y, dir_x, dir_y, plane_x, plane_y
+    global current_weapon, player_hp, player_invulnerable_time, player_score, sau_count, player_x, player_y, dir_x, dir_y, plane_x, plane_y, player_damage_flash_time
     pygame.init()
     pygame.display.set_caption("Vibe Wolf (OpenGL)")
 
@@ -1164,10 +1351,10 @@ def main() -> None:
     enemy_types = ["normal", "normal", "strong", "fast", "normal", "strong", "fast", "normal"]
     existing_positions = [(player_x, player_y)]  # Start with player position to avoid spawning too close
     
-    for enemy_type in enemy_types:
-        x, y = find_valid_spawn_position(existing_positions, min_distance=3.0)  # Increased distance from player
-        enemies.append(Enemy(x, y, enemy_type))
-        existing_positions.append((x, y))
+    # Enemy spawning delay - don't spawn enemies for the first 5 seconds
+    enemy_spawn_delay = 5.0  # seconds
+    enemy_spawn_timer = 0.0
+    enemies_spawned = False
 
     # Mus-capture (synlig cursor + crosshair)
     pygame.event.set_grab(True)
@@ -1248,6 +1435,18 @@ def main() -> None:
         dir_x, dir_y = new_dir_x, new_dir_y
         plane_x, plane_y = new_plane_x, new_plane_y
 
+        # Enemy spawning logic with delay
+        if not enemies_spawned:
+            enemy_spawn_timer += dt
+            if enemy_spawn_timer >= enemy_spawn_delay:
+                # Spawn all enemies after the delay
+                for enemy_type in enemy_types:
+                    x, y = find_valid_spawn_position(existing_positions, min_distance=3.0)
+                    enemies.append(Enemy(x, y, enemy_type))
+                    existing_positions.append((x, y))
+                enemies_spawned = True
+                print(f"Fiender spawnet etter {enemy_spawn_delay} sekunder!")
+
         # Oppdater bullets
         for b in bullets:
             b.update(dt)
@@ -1283,10 +1482,14 @@ def main() -> None:
                 dy = player_y - e.y
                 dist = math.hypot(dx, dy)
                 
-                # Fiende skader spilleren hvis den er nær og spilleren ikke er invulnerable
-                if dist <= 0.8 and player_invulnerable_time <= 0.0:
+                # Fiende skader spilleren hvis den er nær, spilleren ikke er invulnerable, og 300ms har gått
+                current_time = pygame.time.get_ticks() / 1000.0
+                if (dist <= 0.8 and player_invulnerable_time <= 0.0 and 
+                    current_time - e.last_damage_time >= 0.3):  # 300ms forsinkelse
                     player_hp -= 10  # 10 skade per frame når fiende er nær
                     player_invulnerable_time = 0.5  # 0.5 sekunder invulnerability
+                    player_damage_flash_time = 0.15  # 0.15 sekunder rød flash
+                    e.last_damage_time = current_time  # Oppdater siste skade-tid
                     print(f"Spiller tar skade! HP: {player_hp}/{player_max_hp}")
                     
                     # Sjekk om spilleren dør
@@ -1298,6 +1501,10 @@ def main() -> None:
         # Oppdater invulnerability timer
         if player_invulnerable_time > 0.0:
             player_invulnerable_time -= dt
+            
+        # Oppdater damage flash timer
+        if player_damage_flash_time > 0.0:
+            player_damage_flash_time -= dt
 
         # ---------- Render ----------
         gl.glViewport(0, 0, WIDTH, HEIGHT)
@@ -1339,6 +1546,11 @@ def main() -> None:
         enemies_batch = build_enemies_batch(enemies)
         if enemies_batch.size:
             renderer.draw_arrays(enemies_batch, renderer.textures[200], use_tex=True)
+
+        # Explosion particles (må tegnes etter fiendene)
+        explosion_particles = build_explosion_particles(enemies)
+        if explosion_particles.size:
+            renderer.draw_arrays(explosion_particles, renderer.white_tex, use_tex=False)
 
         # Enemy HP bars (må tegnes etter fiendene, men før UI-elementer)
         enemy_hp_bars = build_enemy_hp_bars(enemies)
@@ -1394,6 +1606,16 @@ def main() -> None:
         # Sau count display
         sau_count_display = build_sau_count_display()
         renderer.draw_arrays(sau_count_display, renderer.white_tex, use_tex=False)
+
+        # Enemy spawn countdown (kun hvis fiendene ikke har spawnet ennå)
+        countdown_display = build_enemy_spawn_countdown(enemies_spawned, enemy_spawn_timer, enemy_spawn_delay)
+        if countdown_display.size:
+            renderer.draw_arrays(countdown_display, renderer.white_tex, use_tex=False)
+
+        # Damage flash effect (må tegnes sist, over alt annet)
+        damage_flash = build_damage_flash()
+        if damage_flash.size:
+            renderer.draw_arrays(damage_flash, renderer.white_tex, use_tex=False)
 
         pygame.display.flip()
 
