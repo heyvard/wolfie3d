@@ -155,7 +155,9 @@ explosion_time = 0.0  # Tid for eksplosjons-effekt
 explosion_x = 0.0  # X-posisjon for eksplosjon
 explosion_y = 0.0  # Y-posisjon for eksplosjon
 
-# ---------- Highscore system ----------
+# ---------- Timer og highscore system ----------
+GAME_DURATION = 60.0  # 60 sekunder (1 minutt)
+
 def load_highscores() -> list[dict]:
     """Laster highscores fra fil."""
     try:
@@ -174,19 +176,32 @@ def save_highscores(highscores: list[dict]) -> None:
     except:
         pass
 
-def is_highscore(score: int) -> bool:
+def calculate_final_score(score: int, time_remaining: float) -> int:
+    """Beregner final score basert på poeng og gjenværende tid."""
+    # Bonus poeng for rask tid: 10 poeng per sekund igjen
+    time_bonus = int(time_remaining * 10)
+    return score + time_bonus
+
+def is_highscore(score: int, time_remaining: float) -> bool:
     """Sjekker om score er en highscore."""
+    final_score = calculate_final_score(score, time_remaining)
     highscores = load_highscores()
     if len(highscores) < 10:  # Mindre enn 10 highscores
         return True
-    return score > min(hs["score"] for hs in highscores)
+    return final_score > min(hs["final_score"] for hs in highscores)
 
-def add_highscore(name: str, score: int) -> None:
+def add_highscore(name: str, score: int, time_remaining: float) -> None:
     """Legger til en ny highscore."""
+    final_score = calculate_final_score(score, time_remaining)
     highscores = load_highscores()
-    highscores.append({"name": name, "score": score})
-    # Sorter etter score (høyest først)
-    highscores.sort(key=lambda x: x["score"], reverse=True)
+    highscores.append({
+        "name": name, 
+        "score": score, 
+        "time_remaining": time_remaining,
+        "final_score": final_score
+    })
+    # Sorter etter final_score (høyest først)
+    highscores.sort(key=lambda x: x["final_score"], reverse=True)
     # Behold kun top 10
     highscores = highscores[:10]
     save_highscores(highscores)
@@ -1059,6 +1074,40 @@ def build_score_display() -> np.ndarray:
     
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
+def build_timer_display(game_timer: float) -> np.ndarray:
+    """Viser game timer øverst til venstre."""
+    
+    # Timer boks
+    bar_width = 120
+    bar_height = 30
+    x = 10
+    y = 10  # Øverst, over minimappet
+    
+    x0 = (2.0 * x) / WIDTH - 1.0
+    x1 = (2.0 * (x + bar_width)) / WIDTH - 1.0
+    y0 = 1.0 - 2.0 * (y / HEIGHT)
+    y1 = 1.0 - 2.0 * ((y + bar_height) / HEIGHT)
+    
+    # Farge - rød hvis under 10 sekunder, gul hvis under 30, ellers grønn
+    if game_timer <= 10.0:
+        r, g, b = 1.0, 0.0, 0.0  # Rød
+    elif game_timer <= 30.0:
+        r, g, b = 1.0, 1.0, 0.0  # Gul
+    else:
+        r, g, b = 0.0, 1.0, 0.0  # Grønn
+    depth = 0.0
+    
+    verts = [
+        x0, y0, 0.0, 0.0, r, g, b, depth,
+        x0, y1, 0.0, 1.0, r, g, b, depth,
+        x1, y0, 1.0, 0.0, r, g, b, depth,
+        x1, y0, 1.0, 0.0, r, g, b, depth,
+        x0, y1, 0.0, 1.0, r, g, b, depth,
+        x1, y1, 1.0, 1.0, r, g, b, depth,
+    ]
+    
+    return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
+
 def build_sau_count_display() -> np.ndarray:
     """Viser antall sauer igjen øverst til høyre."""
     global sau_count, active_sau
@@ -1251,21 +1300,25 @@ def build_enemy_spawn_countdown(enemies_spawned: bool, enemy_spawn_timer: float,
     
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
-def show_highscores_screen(renderer, final_score: int) -> None:
+def show_highscores_screen(renderer, final_score: int, time_remaining: float) -> None:
     """Viser highscores og lar spilleren skrive navn hvis det er en highscore."""
     highscores = load_highscores()
     
 
     
     # Sjekk om dette er en highscore
-    if is_highscore(final_score):
-        print(f"🎉 NY HIGHSCORE! Score: {final_score}")
+    if is_highscore(final_score, time_remaining):
+        final_score_with_bonus = calculate_final_score(final_score, time_remaining)
+        minutes = int(time_remaining) // 60
+        seconds = int(time_remaining) % 60
+        time_str = f"{minutes:01d}:{seconds:02d}"
+        print(f"🎉 NY HIGHSCORE! Score: {final_score} + {int(time_remaining * 10)} tid bonus = {final_score_with_bonus} (Tid: {time_str})")
         
         # Hent navn fra spilleren
         player_name = get_player_name_input(renderer)
         if not player_name.strip():
             player_name = "Anonymous"  # Default navn hvis ingen input
-        add_highscore(player_name, final_score)
+        add_highscore(player_name, final_score, time_remaining)
         print(f"Highscore lagret for {player_name}!")
     
     # Last inn oppdaterte highscores etter at ny highscore er lagt til
@@ -1274,7 +1327,14 @@ def show_highscores_screen(renderer, final_score: int) -> None:
     # Vis highscores
     print("\n=== HIGHSCORES ===")
     for i, hs in enumerate(highscores[:10], 1):
-        print(f"{i:2d}. {hs['name']:<15} {hs['score']:>6}")
+        if "final_score" in hs:
+            minutes = int(hs['time_remaining']) // 60
+            seconds = int(hs['time_remaining']) % 60
+            time_str = f"{minutes:01d}:{seconds:02d}"
+            print(f"{i:2d}. {hs['name']:<15} {hs['final_score']:>6} (Score: {hs['score']} + {int(hs['time_remaining'] * 10)} tid - {time_str})")
+        else:
+            # Legacy format
+            print(f"{i:2d}. {hs['name']:<15} {hs['score']:>6}")
     
     print("\nTrykk ESC for å avslutte...")
     
@@ -1325,9 +1385,21 @@ def show_highscores_screen(renderer, final_score: int) -> None:
         # Render highscores
         y_offset = y + 80
         for i, hs in enumerate(highscores[:10], 1):
-            score_text = f"{i:2d}. {hs['name']:<15} {hs['score']:>6}"
-            draw_text_px(renderer, score_text, x + 20, y_offset, size=24, color=(0, 0, 0))
-            y_offset += 25
+            if "final_score" in hs:
+                score_text = f"{i:2d}. {hs['name']:<12} {hs['final_score']:>6}"
+                draw_text_px(renderer, score_text, x + 20, y_offset, size=24, color=(0, 0, 0))
+                # Vis detaljer på neste linje
+                minutes = int(hs['time_remaining']) // 60
+                seconds = int(hs['time_remaining']) % 60
+                time_str = f"{minutes:01d}:{seconds:02d}"
+                detail_text = f"    Score: {hs['score']} + {int(hs['time_remaining'] * 10)} tid ({time_str})"
+                draw_text_px(renderer, detail_text, x + 20, y_offset + 20, size=16, color=(100, 100, 100))
+                y_offset += 40
+            else:
+                # Legacy format
+                score_text = f"{i:2d}. {hs['name']:<15} {hs['score']:>6}"
+                draw_text_px(renderer, score_text, x + 20, y_offset, size=24, color=(0, 0, 0))
+                y_offset += 25
         
         # Render instruksjoner
         draw_text_px(renderer, "Trykk ESC for å avslutte", WIDTH//2 - 120, y + hs_height - 30, size=24, color=(0, 0, 0))
@@ -1398,7 +1470,7 @@ def build_minimap_quads() -> np.ndarray:
     scale = 6
     mm_w = MAP_W * scale
     mm_h = MAP_H * scale
-    pad = 10
+    pad = 45  # Start under timer-displayet (timer har høyde 30 + litt margin)
     verts: list[float] = []
 
     def add_quad_px(x_px, y_px, w_px, h_px, col, depth):
@@ -1417,26 +1489,26 @@ def build_minimap_quads() -> np.ndarray:
         ])
 
     # Bakgrunn
-    add_quad_px(pad-2, pad-2, mm_w+4, mm_h+4, (0.1, 0.1, 0.1), 0.0)
+    add_quad_px(pad-2, pad-2, mm_w+4, mm_h+4, (0.1, 0.1, 0.1), 0.1)
 
     # Celler
     for y in range(MAP_H):
         for x in range(MAP_W):
             if MAP[y][x] > 0:
                 col = (0.86, 0.86, 0.86)
-                add_quad_px(pad + x*scale, pad + y*scale, scale-1, scale-1, col, 0.0)
+                add_quad_px(pad + x*scale, pad + y*scale, scale-1, scale-1, col, 0.1)
 
     # Spiller
     px = int(player_x * scale)
     py = int(player_y * scale)
-    add_quad_px(pad + px - 2, pad + py - 2, 4, 4, (1.0, 0.3, 0.3), 0.0)
+    add_quad_px(pad + px - 2, pad + py - 2, 4, 4, (1.0, 0.3, 0.3), 0.1)
 
     # Retningsstrek (en liten rektangulær "linje")
     fx = int(px + dir_x * 8)
     fy = int(py + dir_y * 8)
     # tegn som tynn boks mellom (px,py) og (fx,fy)
     # for enkelhet: bare en liten boks på enden
-    add_quad_px(pad + fx - 1, pad + fy - 1, 2, 2, (1.0, 0.3, 0.3), 0.0)
+    add_quad_px(pad + fx - 1, pad + fy - 1, 2, 2, (1.0, 0.3, 0.3), 0.1)
 
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
@@ -1725,6 +1797,9 @@ def main() -> None:
     enemy_spawn_delay = 5.0  # seconds
     enemy_spawn_timer = 0.0
     enemies_spawned = False
+    
+    # Game timer - 60 seconds countdown
+    game_timer = GAME_DURATION  # Start with 60 seconds
 
     # Mus-capture (synlig cursor + crosshair)
     pygame.event.set_grab(True)
@@ -1905,7 +1980,7 @@ def main() -> None:
                     # Sjekk om spilleren dør
                     if player_hp <= 0:
                         print(f"GAME OVER - Spilleren døde! Final Score: {player_score}")
-                        show_highscores_screen(renderer, player_score)
+                        show_highscores_screen(renderer, player_score, game_timer)
                         running = False
         
         # Oppdater invulnerability timer
@@ -1919,11 +1994,18 @@ def main() -> None:
         # Oppdater eksplosjons timer
         if explosion_time > 0.0:
             explosion_time -= dt
+            
+        # Oppdater game timer
+        game_timer -= dt
+        if game_timer <= 0.0:
+            print(f"⏰ TID UTE! Game Over! Final Score: {player_score}")
+            show_highscores_screen(renderer, player_score, 0.0)  # 0.0 tid igjen
+            running = False
 
         # Sjekk om spilleren har vunnet (drept alle fiender)
         if enemies_spawned and all(not e.alive for e in enemies):
             print(f"🎉 VICTORY! Alle fiender drept! Final Score: {player_score}")
-            show_highscores_screen(renderer, player_score)
+            show_highscores_screen(renderer, player_score, game_timer)
             running = False
 
         # ---------- Render ----------
@@ -2024,6 +2106,16 @@ def main() -> None:
         
         renderer.draw_arrays(status_display, status_tex, use_tex=True)
 
+        # Timer display
+        timer_display = build_timer_display(game_timer)
+        renderer.draw_arrays(timer_display, renderer.white_tex, use_tex=False)
+        
+        # Render timer text
+        minutes = int(game_timer) // 60
+        seconds = int(game_timer) % 60
+        timer_text = f"Tid: {minutes:01d}:{seconds:02d}"
+        draw_text_px(renderer, timer_text, 15, 15, size=20, color=(0, 0, 0))
+        
         # Score display
         score_display = build_score_display()
         renderer.draw_arrays(score_display, renderer.white_tex, use_tex=False)
