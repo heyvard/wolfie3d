@@ -1364,7 +1364,7 @@ def show_highscores_screen(renderer, final_score: int, time_remaining: float) ->
         
         hs_width = 750  # Bredere for bedre layout
         hs_height = title_height + (num_entries * entry_height) + button_height + margin
-        x = (WIDTH - hs_width) // 2
+        x = (WIDTH - hs_width) // 2 + 100  # Flyttet 100 piksler til høyre
         y = (HEIGHT - hs_height) // 2
         
         x0 = (2.0 * x) / WIDTH - 1.0
