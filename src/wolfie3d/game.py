@@ -1300,8 +1300,9 @@ def build_enemy_spawn_countdown(enemies_spawned: bool, enemy_spawn_timer: float,
     
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
-def show_highscores_screen(renderer, final_score: int, time_remaining: float) -> None:
-    """Viser highscores og lar spilleren skrive navn hvis det er en highscore."""
+def show_highscores_screen(renderer, final_score: int, time_remaining: float) -> bool:
+    """Viser highscores og lar spilleren skrive navn hvis det er en highscore.
+    Returnerer True hvis spilleren vil spille igjen, False hvis de vil avslutte."""
     highscores = load_highscores()
     
 
@@ -1336,16 +1337,18 @@ def show_highscores_screen(renderer, final_score: int, time_remaining: float) ->
             # Legacy format
             print(f"{i:2d}. {hs['name']:<15} {hs['score']:>6}")
     
-    print("\nTrykk ESC for å avslutte...")
+    print("\nTrykk ENTER for å spille igjen, ESC for å avslutte...")
     
-    # Vis highscores skjerm i 5 sekunder
-    start_time = pygame.time.get_ticks()
-    while pygame.time.get_ticks() - start_time < 5000:  # 5 sekunder
+    # Vis highscores skjerm med spill igjen-opsjon
+    while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                return
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                return
+                return False
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    return False
+                if event.key == pygame.K_RETURN:
+                    return True
         
         # Render highscores overlay
         gl.glViewport(0, 0, WIDTH, HEIGHT)
@@ -1354,7 +1357,7 @@ def show_highscores_screen(renderer, final_score: int, time_remaining: float) ->
         
         # Highscores boks
         hs_width = 500
-        hs_height = 400
+        hs_height = 450  # Litt høyere for å plassere til spill igjen-knapp
         x = (WIDTH - hs_width) // 2
         y = (HEIGHT - hs_height) // 2
         
@@ -1401,12 +1404,41 @@ def show_highscores_screen(renderer, final_score: int, time_remaining: float) ->
                 draw_text_px(renderer, score_text, x + 20, y_offset, size=24, color=(0, 0, 0))
                 y_offset += 25
         
-        # Render instruksjoner
-        draw_text_px(renderer, "Trykk ESC for å avslutte", WIDTH//2 - 120, y + hs_height - 30, size=24, color=(0, 0, 0))
+        # Render spill igjen-knapp
+        play_again_y = y + hs_height - 80
+        draw_text_px(renderer, "Trykk ENTER for å spille igjen", WIDTH//2 - 150, play_again_y, size=24, color=(0, 0, 0))
+        draw_text_px(renderer, "Trykk ESC for å avslutte", WIDTH//2 - 120, play_again_y + 30, size=24, color=(0, 0, 0))
         
         pygame.display.flip()
         
         pygame.time.wait(16)
+
+def reset_game_state():
+    """Resetter spill-tilstanden for en ny runde."""
+    global current_weapon, player_hp, player_max_hp, player_invulnerable_time, player_score, sau_count, active_sau, explosion_time, explosion_x, explosion_y, player_x, player_y, dir_x, dir_y, plane_x, plane_y, player_damage_flash_time
+    
+    # Reset player stats
+    player_hp = player_max_hp
+    player_invulnerable_time = 0.0
+    player_damage_flash_time = 0.0
+    player_score = 0
+    sau_count = 5  # Start med 5 sauer (original verdi)
+    
+    # Reset player position and direction
+    player_x, player_y = PLAYER_START_X, PLAYER_START_Y  # Start position
+    dir_x, dir_y = PLAYER_START_DIR_X, PLAYER_START_DIR_Y  # Start direction
+    plane_x, plane_y = PLAYER_START_PLANE_X, PLAYER_START_PLANE_Y  # Start plane
+    
+    # Reset weapon
+    current_weapon = WEAPON_PISTOL
+    
+    # Reset effects
+    active_sau = None
+    explosion_time = 0.0
+    explosion_x = 0.0
+    explosion_y = 0.0
+    
+    print("🎮 Spill-tilstand resatt for ny runde!")
 
 def show_game_over_screen(renderer, final_score: int) -> None:
     """Viser Game Over skjerm med final score."""
@@ -1807,7 +1839,7 @@ def main() -> None:
 
     running = True
     while running:
-        dt = clock.tick(FPS) / 1000.0
+        dt = min(clock.tick(FPS) / 1000.0, 0.05)  # maks 50 ms per frame for sikkerhet
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -1922,6 +1954,7 @@ def main() -> None:
                 enemies_spawned = True
                 print(f"Fiender spawnet etter {enemy_spawn_delay} sekunder!")
 
+
         # Oppdater bullets
         for b in bullets:
             b.update(dt)
@@ -1980,8 +2013,30 @@ def main() -> None:
                     # Sjekk om spilleren dør
                     if player_hp <= 0:
                         print(f"GAME OVER - Spilleren døde! Final Score: {player_score}")
-                        show_highscores_screen(renderer, player_score, game_timer)
-                        running = False
+                        play_again = show_highscores_screen(renderer, player_score, game_timer)
+                        if play_again:
+                            # Reset game state when player chooses to play again
+                            reset_game_state()
+                            # Reset game loop variables
+                            bullets.clear()
+                            enemies.clear()
+                            firing = False
+                            recoil_t = 0.0
+                            enemy_spawn_timer = 0.0  # Reset spawn timer
+                            enemies_spawned = False
+                            game_timer = GAME_DURATION
+                            existing_positions = [(player_x, player_y)]  # Reset spawn positions
+                            
+                            clock.tick(0)  # VIKTIG: flush/zero dt slik at neste frame ikke får gigantisk dt
+                            
+                            print("🔄 Ny runde starter - venter 5 sekunder på fiendene...")
+                            # Continue to next round
+                            continue
+                        else:
+                            running = False
+        
+        # Fjern døde fiender fra listen
+        enemies = [e for e in enemies if e.alive]
         
         # Oppdater invulnerability timer
         if player_invulnerable_time > 0.0:
@@ -1999,14 +2054,52 @@ def main() -> None:
         game_timer -= dt
         if game_timer <= 0.0:
             print(f"⏰ TID UTE! Game Over! Final Score: {player_score}")
-            show_highscores_screen(renderer, player_score, 0.0)  # 0.0 tid igjen
-            running = False
+            play_again = show_highscores_screen(renderer, player_score, 0.0)  # 0.0 tid igjen
+            if play_again:
+                # Reset game state when player chooses to play again
+                reset_game_state()
+                # Reset game loop variables
+                bullets.clear()
+                enemies.clear()
+                firing = False
+                recoil_t = 0.0
+                enemy_spawn_timer = 0.0  # Reset spawn timer
+                enemies_spawned = False
+                game_timer = GAME_DURATION
+                existing_positions = [(player_x, player_y)]  # Reset spawn positions
+                
+                clock.tick(0)  # VIKTIG: flush/zero dt slik at neste frame ikke får gigantisk dt
+                
+                print("🔄 Ny runde starter - venter 5 sekunder på fiendene...")
+                # Continue to next round
+                continue
+            else:
+                running = False
 
         # Sjekk om spilleren har vunnet (drept alle fiender)
         if enemies_spawned and all(not e.alive for e in enemies):
             print(f"🎉 VICTORY! Alle fiender drept! Final Score: {player_score}")
-            show_highscores_screen(renderer, player_score, game_timer)
-            running = False
+            play_again = show_highscores_screen(renderer, player_score, game_timer)
+            if play_again:
+                # Reset game state when player chooses to play again
+                reset_game_state()
+                # Reset game loop variables
+                bullets.clear()
+                enemies.clear()
+                firing = False
+                recoil_t = 0.0
+                enemy_spawn_timer = 0.0  # Reset spawn timer
+                enemies_spawned = False
+                game_timer = GAME_DURATION
+                existing_positions = [(player_x, player_y)]  # Reset spawn positions
+                
+                clock.tick(0)  # VIKTIG: flush/zero dt slik at neste frame ikke får gigantisk dt
+                
+                print("🔄 Ny runde starter - venter 5 sekunder på fiendene...")
+                # Continue to next round
+                continue
+            else:
+                running = False
 
         # ---------- Render ----------
         gl.glViewport(0, 0, WIDTH, HEIGHT)
