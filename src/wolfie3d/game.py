@@ -996,14 +996,14 @@ def build_weapon_status_display() -> np.ndarray:
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
 def build_hp_display() -> np.ndarray:
-    """Viser spiller HP som en rød balk øverst til venstre."""
+    """Viser spiller HP som en rød balk nedenfor minimappet."""
     global player_hp, player_max_hp
     
     # HP balk
     bar_width = 200
     bar_height = 20
     x = 10
-    y = 10
+    y = 175  # Nedenfor minimappet (minimap slutter på y=165)
     
     # Bakgrunn (mørk rød)
     bg_x0 = (2.0 * x) / WIDTH - 1.0
