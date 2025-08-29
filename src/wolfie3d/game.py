@@ -18,6 +18,8 @@ Taster:
   - WASD / piltaster: bevegelse
   - Q/E eller ← → : rotasjon
   - SPACE / venstre mus: skyte
+  - 1: bytt til pistol
+  - 2: bytt til sau
   - ESC: avslutt
 """
 
@@ -47,6 +49,11 @@ PLANE_LEN = math.tan(FOV / 2)
 MOVE_SPEED = 3.0      # enheter/sek
 ROT_SPEED = 2.0       # rad/sek
 STRAFE_SPEED = 2.5
+
+# Våpen
+WEAPON_PISTOL = 1
+WEAPON_SAU = 2
+current_weapon = WEAPON_PISTOL
 
 # Tekstur-størrelse brukt på GPU (proseduralt generert)
 TEX_W = TEX_H = 256
@@ -120,6 +127,29 @@ class Bullet:
         self.x, self.y = nx, ny
         self.age += dt
         self.height_param = min(0.65, self.height_param + 0.35 * dt)
+
+class SauBullet:
+    """Sau som sendes som prosjektil"""
+    def __init__(self, x: float, y: float, vx: float, vy: float) -> None:
+        self.x = x
+        self.y = y
+        self.vx = vx
+        self.vy = vy
+        self.alive = True
+        self.age = 0.0
+        self.height_param = 0.3  # Litt høyere enn kuler
+
+    def update(self, dt: float) -> None:
+        if not self.alive:
+            return
+        nx = self.x + self.vx * dt
+        ny = self.y + self.vy * dt
+        if is_wall(int(nx), int(ny)):
+            self.alive = False
+            return
+        self.x, self.y = nx, ny
+        self.age += dt
+        self.height_param = min(0.7, self.height_param + 0.3 * dt)
 
 # ---------- Fiende ----------
 class Enemy:
@@ -468,6 +498,26 @@ class GLRenderer:
             print(f"[GLRenderer] Enemy: FEIL ved lasting ({ex}), bruker prosedural")
             self.textures[200] = surface_to_texture(make_enemy_texture())
 
+        # Weapon sprites (ID 300-301): pistol og sau
+        try:
+            sprites_dir = self._resolve_textures_base().parent / "sprites"
+            pistol_path = sprites_dir / "pistol.png"
+            sau_path = sprites_dir / "sau.png"
+            
+            if pistol_path.exists():
+                self.textures[300] = self._load_texture_file(pistol_path, 256)
+                print(f"[GLRenderer] Pistol OK (GL tex id {self.textures[300]})")
+            else:
+                print("[GLRenderer] Pistol: fil ikke funnet")
+                
+            if sau_path.exists():
+                self.textures[301] = self._load_texture_file(sau_path, 256)
+                print(f"[GLRenderer] Sau OK (GL tex id {self.textures[301]})")
+            else:
+                print("[GLRenderer] Sau: fil ikke funnet")
+        except Exception as ex:
+            print(f"[GLRenderer] Våpen: FEIL ved lasting ({ex})")
+
         print("[GLRenderer] Teksturer lastet.\n")
 
     # ---------- draw ----------
@@ -620,8 +670,8 @@ def build_fullscreen_background() -> np.ndarray:
     add_quad(-1.0,  0.0,  1.0, -1.0, floor_col) # nedre halvdel
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
-def build_sprites_batch(bullets: list[Bullet]) -> np.ndarray:
-    """Bygger ett quad per kule i skjermen (billboard), med depth."""
+def build_sprites_batch(bullets: list[Bullet | SauBullet]) -> np.ndarray:
+    """Bygger ett quad per kule/sau i skjermen (billboard), med depth."""
     verts: list[float] = []
 
     for b in bullets:
@@ -781,31 +831,102 @@ def build_crosshair_quads(size_px: int = 8, thickness_px: int = 2) -> np.ndarray
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
 def build_weapon_overlay(firing: bool, recoil_t: float) -> np.ndarray:
-    """En enkel "pistolboks" nederst (farget quad), m/ liten recoil-bevegelse."""
-    base_w, base_h = 200, 120
+    """Våpenoverlay som viser enten pistol eller sau basert på current_weapon."""
+    global current_weapon
+    
+    if current_weapon == WEAPON_PISTOL:
+        # Pistol - mindre
+        base_w, base_h = 120, 60
+    else:  # WEAPON_SAU
+        # Sau - større
+        base_w, base_h = 180, 120
+    
     x = HALF_W - base_w // 2
     y = HEIGHT - base_h - 10
     if firing:
-        y += int(6 * math.sin(min(1.0, recoil_t) * math.pi))
+        recoil_amount = 8 if current_weapon == WEAPON_SAU else 6
+        y += int(recoil_amount * math.sin(min(1.0, recoil_t) * math.pi))
 
     x0 = (2.0 * x) / WIDTH - 1.0
     x1 = (2.0 * (x + base_w)) / WIDTH - 1.0
     y0 = 1.0 - 2.0 * (y / HEIGHT)
     y1 = 1.0 - 2.0 * ((y + base_h) / HEIGHT)
 
-    # lett gjennomsiktig mørk grå
-    # vi bruker v_col for RGB, alpha kommer fra tekstur (1x1 hvit, a=1). For alpha: n.a. her.
-    r, g, b = (0.12, 0.12, 0.12)
+    # Hvit farge for tekstur (ingen tinting)
+    r, g, b = 1.0, 1.0, 1.0
     depth = 0.0
-    verts = [
-        x0, y0, 0.0, 0.0, r, g, b, depth,
-        x0, y1, 0.0, 1.0, r, g, b, depth,
-        x1, y0, 1.0, 0.0, r, g, b, depth,
+    
+    if current_weapon == WEAPON_SAU:
+        # Sau - flip texture coordinates to fix upside down
+        verts = [
+            x0, y0, 0.0, 1.0, r, g, b, depth,  # Top-left with flipped Y
+            x0, y1, 0.0, 0.0, r, g, b, depth,  # Bottom-left with flipped Y
+            x1, y0, 1.0, 1.0, r, g, b, depth,  # Top-right with flipped Y
 
-        x1, y0, 1.0, 0.0, r, g, b, depth,
-        x0, y1, 0.0, 1.0, r, g, b, depth,
-        x1, y1, 1.0, 1.0, r, g, b, depth,
-    ]
+            x1, y0, 1.0, 1.0, r, g, b, depth,  # Top-right with flipped Y
+            x0, y1, 0.0, 0.0, r, g, b, depth,  # Bottom-left with flipped Y
+            x1, y1, 1.0, 0.0, r, g, b, depth,  # Bottom-right with flipped Y
+        ]
+    else:
+        # Pistol - normal texture coordinates
+        verts = [
+            x0, y0, 0.0, 0.0, r, g, b, depth,
+            x0, y1, 0.0, 1.0, r, g, b, depth,
+            x1, y0, 1.0, 0.0, r, g, b, depth,
+
+            x1, y0, 1.0, 0.0, r, g, b, depth,
+            x0, y1, 0.0, 1.0, r, g, b, depth,
+            x1, y1, 1.0, 1.0, r, g, b, depth,
+        ]
+    
+    return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
+
+def build_weapon_status_display() -> np.ndarray:
+    """Viser hvilket våpen som er valgt (liten våpenbilde øverst til høyre)."""
+    global current_weapon
+    
+    if current_weapon == WEAPON_PISTOL:
+        # Pistol - mindre
+        base_w, base_h = 40, 20
+    else:  # WEAPON_SAU
+        # Sau - litt større
+        base_w, base_h = 50, 30
+    
+    x = WIDTH - base_w - 10
+    y = 10
+    
+    x0 = (2.0 * x) / WIDTH - 1.0
+    x1 = (2.0 * (x + base_w)) / WIDTH - 1.0
+    y0 = 1.0 - 2.0 * (y / HEIGHT)
+    y1 = 1.0 - 2.0 * ((y + base_h) / HEIGHT)
+
+    # Hvit farge for tekstur
+    r, g, b = 1.0, 1.0, 1.0
+    depth = 0.0
+    
+    if current_weapon == WEAPON_SAU:
+        # Sau - flip texture coordinates
+        verts = [
+            x0, y0, 0.0, 1.0, r, g, b, depth,
+            x0, y1, 0.0, 0.0, r, g, b, depth,
+            x1, y0, 1.0, 1.0, r, g, b, depth,
+
+            x1, y0, 1.0, 1.0, r, g, b, depth,
+            x0, y1, 0.0, 0.0, r, g, b, depth,
+            x1, y1, 1.0, 0.0, r, g, b, depth,
+        ]
+    else:
+        # Pistol - normal texture coordinates
+        verts = [
+            x0, y0, 0.0, 0.0, r, g, b, depth,
+            x0, y1, 0.0, 1.0, r, g, b, depth,
+            x1, y0, 1.0, 0.0, r, g, b, depth,
+
+            x1, y0, 1.0, 0.0, r, g, b, depth,
+            x0, y1, 0.0, 1.0, r, g, b, depth,
+            x1, y1, 1.0, 1.0, r, g, b, depth,
+        ]
+    
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
 def build_minimap_quads() -> np.ndarray:
@@ -905,6 +1026,7 @@ def handle_input(dt: float) -> None:
 
 # ---------- Main ----------
 def main() -> None:
+    global current_weapon
     pygame.init()
     pygame.display.set_caption("Vibe Wolf (OpenGL)")
 
@@ -949,19 +1071,45 @@ def main() -> None:
                 if event.key == pygame.K_ESCAPE:
                     running = False
                 if event.key == pygame.K_SPACE:
-                    bx = player_x + dir_x * 0.4
-                    by = player_y + dir_y * 0.4
-                    bvx = dir_x * 10.0
-                    bvy = dir_y * 10.0
-                    bullets.append(Bullet(bx, by, bvx, bvy))
+                    # Skyt basert på valgt våpen
+                    if current_weapon == WEAPON_PISTOL:
+                        # Pistol - raskere, svakere kuler
+                        bx = player_x + dir_x * 0.4
+                        by = player_y + dir_y * 0.4
+                        bvx = dir_x * 12.0  # Raskere
+                        bvy = dir_y * 12.0
+                        bullets.append(Bullet(bx, by, bvx, bvy))
+                    else:  # WEAPON_SAU
+                        # Sau - send sau som prosjektil
+                        bx = player_x + dir_x * 0.4
+                        by = player_y + dir_y * 0.4
+                        bvx = dir_x * 6.0   # Tregere
+                        bvy = dir_y * 6.0
+                        bullets.append(SauBullet(bx, by, bvx, bvy))
                     firing = True
                     recoil_t = 0.0
+                if event.key == pygame.K_1:
+                    current_weapon = WEAPON_PISTOL
+                    print("Våpen 1 (Pistol) valgt")
+                if event.key == pygame.K_2:
+                    current_weapon = WEAPON_SAU
+                    print("Våpen 2 (Sau) valgt")
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                bx = player_x + dir_x * 0.4
-                by = player_y + dir_y * 0.4
-                bvx = dir_x * 10.0
-                bvy = dir_y * 10.0
-                bullets.append(Bullet(bx, by, bvx, bvy))
+                # Skyt basert på valgt våpen (samme som SPACE)
+                if current_weapon == WEAPON_PISTOL:
+                    # Pistol - raskere, svakere kuler
+                    bx = player_x + dir_x * 0.4
+                    by = player_y + dir_y * 0.4
+                    bvx = dir_x * 12.0  # Raskere
+                    bvy = dir_y * 12.0
+                    bullets.append(Bullet(bx, by, bvx, bvy))
+                else:  # WEAPON_SAU
+                    # Sau - send sau som prosjektil
+                    bx = player_x + dir_x * 0.4
+                    by = player_y + dir_y * 0.4
+                    bvx = dir_x * 6.0   # Tregere
+                    bvy = dir_y * 6.0
+                    bullets.append(SauBullet(bx, by, bvx, bvy))
                 firing = True
                 recoil_t = 0.0
 
@@ -1006,9 +1154,10 @@ def main() -> None:
             arr = np.asarray(verts_list, dtype=np.float32).reshape((-1, 8))
             renderer.draw_arrays(arr, renderer.textures[tid], use_tex=True)
 
-        # Sprites (kuler)
+        # Sprites (kuler og sauer)
         spr = build_sprites_batch(bullets)
         if spr.size:
+            # Bruk kule-tekstur for alle prosjektiler (forenklet)
             renderer.draw_arrays(spr, renderer.textures[99], use_tex=True)
 
         # Enemies (billboards)
@@ -1026,11 +1175,33 @@ def main() -> None:
             if recoil_t > 0.15:
                 firing = False
         overlay = build_weapon_overlay(firing, recoil_t)
-        renderer.draw_arrays(overlay, renderer.white_tex, use_tex=False)
+        
+        # Velg riktig våpenbilde basert på current_weapon
+        if current_weapon == WEAPON_PISTOL and 300 in renderer.textures:
+            weapon_tex = renderer.textures[300]  # Pistol
+        elif current_weapon == WEAPON_SAU and 301 in renderer.textures:
+            weapon_tex = renderer.textures[301]  # Sau
+        else:
+            weapon_tex = renderer.white_tex  # Fallback
+        
+        renderer.draw_arrays(overlay, weapon_tex, use_tex=True)
 
         # Minimap
         mm = build_minimap_quads()
         renderer.draw_arrays(mm, renderer.white_tex, use_tex=False)
+
+        # Weapon status display
+        status_display = build_weapon_status_display()
+        
+        # Velg riktig våpenbilde for statusindikator
+        if current_weapon == WEAPON_PISTOL and 300 in renderer.textures:
+            status_tex = renderer.textures[300]  # Pistol
+        elif current_weapon == WEAPON_SAU and 301 in renderer.textures:
+            status_tex = renderer.textures[301]  # Sau
+        else:
+            status_tex = renderer.white_tex  # Fallback
+        
+        renderer.draw_arrays(status_display, status_tex, use_tex=True)
 
         pygame.display.flip()
 

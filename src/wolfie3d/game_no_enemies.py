@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+laz#!/usr/bin/env python3
 """
 Vibe Wolf (Python + PyOpenGL) — GL-renderer
 -------------------------------------------
