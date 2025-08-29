@@ -992,6 +992,113 @@ def build_minimap_quads() -> np.ndarray:
 
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
+def build_enemy_hp_bars(enemies: list['Enemy']) -> np.ndarray:
+    """
+    Bygger HP-balker som vises over fiendene.
+    
+    Features:
+    - HP-balker som følger fiendene på skjermen
+    - Fargekoding: rød (lav HP) -> gul -> grønn (høy HP)
+    - Responsiv størrelse basert på fiendens avstand
+    - Korrekt depth-testing for 3D-posisjonering
+    """
+    verts: list[float] = []
+    
+    for e in enemies:
+        if not e.alive:
+            continue
+            
+        # Transform til kamera-rom (samme som for fiendene)
+        spr_x = e.x - player_x
+        spr_y = e.y - player_y
+        inv_det = 1.0 / (plane_x * dir_y - dir_x * plane_y + 1e-9)
+        trans_x = inv_det * (dir_y * spr_x - dir_x * spr_y)
+        trans_y = inv_det * (-plane_y * spr_x + plane_x * spr_y)
+        if trans_y <= 0:
+            continue
+
+        sprite_screen_x = int((WIDTH / 2) * (1 + trans_x / trans_y))
+        sprite_h = abs(int(HEIGHT / trans_y))
+        sprite_w = sprite_h  # kvadratisk
+        v_shift = int((0.5 - e.height_param) * sprite_h)
+
+        draw_start_y = max(0, -sprite_h // 2 + HALF_H + v_shift)
+        draw_end_y   = min(HEIGHT - 1, draw_start_y + sprite_h)
+        draw_start_x = -sprite_w // 2 + sprite_screen_x
+        draw_end_x   = draw_start_x + sprite_w
+        if draw_end_x < 0 or draw_start_x >= WIDTH:
+            continue
+
+        draw_start_x = max(0, draw_start_x)
+        draw_end_x   = min(WIDTH - 1, draw_end_x)
+
+        # HP-balk posisjon (over fienden)
+        hp_bar_width = sprite_w * 0.8  # 80% av fiendens bredde
+        hp_bar_height = 8  # Fast høyde på 8 piksler
+        hp_bar_x = sprite_screen_x - hp_bar_width // 2
+        hp_bar_y = draw_start_y - hp_bar_height - 5  # 5 piksler over fienden
+        
+        # Klipp HP-balk hvis den går utenfor skjerm
+        if hp_bar_y < 0:
+            hp_bar_y = 0
+        if hp_bar_y + hp_bar_height > HEIGHT:
+            continue
+            
+        # Konverter til NDC
+        x0 = (2.0 * hp_bar_x) / WIDTH - 1.0
+        x1 = (2.0 * (hp_bar_x + hp_bar_width)) / WIDTH - 1.0
+        y0 = 1.0 - 2.0 * (hp_bar_y / HEIGHT)
+        y1 = 1.0 - 2.0 * ((hp_bar_y + hp_bar_height) / HEIGHT)
+
+        # Depth (samme som fienden, men litt foran)
+        depth = max(0.0, clamp01(trans_y / FAR_PLANE) - 0.01)
+        
+        # HP-ratio for fyll
+        hp_ratio = max(0.0, e.hp / e.max_hp)
+        
+        # Bakgrunn (mørk rød)
+        bg_r, bg_g, bg_b = 0.3, 0.0, 0.0
+        verts.extend([
+            x0, y0, 0.0, 0.0, bg_r, bg_g, bg_b, depth,
+            x0, y1, 0.0, 1.0, bg_r, bg_g, bg_b, depth,
+            x1, y0, 1.0, 0.0, bg_r, bg_g, bg_b, depth,
+            x1, y0, 1.0, 0.0, bg_r, bg_g, bg_b, depth,
+            x0, y1, 0.0, 1.0, bg_r, bg_g, bg_b, depth,
+            x1, y1, 1.0, 1.0, bg_r, bg_g, bg_b, depth,
+        ])
+        
+        # HP-fyll (lys rød til grønn basert på HP)
+        if hp_ratio > 0.0:
+            # Farge går fra rød (lav HP) til grønn (høy HP)
+            if hp_ratio > 0.5:
+                # Over 50% HP: grønn til gul
+                g_ratio = (hp_ratio - 0.5) * 2.0  # 0.0 til 1.0
+                hp_r, hp_g, hp_b = 1.0 - g_ratio, 1.0, 0.0
+            else:
+                # Under 50% HP: rød til gul
+                r_ratio = hp_ratio * 2.0  # 0.0 til 1.0
+                hp_r, hp_g, hp_b = 1.0, r_ratio, 0.0
+            
+            # HP-fyll bredde
+            hp_fill_width = int(hp_bar_width * hp_ratio)
+            hp_fill_x1 = hp_bar_x + hp_fill_width
+            
+            # Konverter fyll til NDC
+            fill_x1 = (2.0 * hp_fill_x1) / WIDTH - 1.0
+            
+            verts.extend([
+                x0, y0, 0.0, 0.0, hp_r, hp_g, hp_b, depth,
+                x0, y1, 0.0, 1.0, hp_r, hp_g, hp_b, depth,
+                fill_x1, y0, 1.0, 0.0, hp_r, hp_g, hp_b, depth,
+                fill_x1, y0, 1.0, 0.0, hp_r, hp_g, hp_b, depth,
+                x0, y1, 0.0, 1.0, hp_r, hp_g, hp_b, depth,
+                fill_x1, y1, 1.0, 1.0, hp_r, hp_g, hp_b, depth,
+            ])
+
+    if not verts:
+        return np.zeros((0, 8), dtype=np.float32)
+    return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
+
 # ---------- Input/fysikk ----------
 def try_move_player(nx: float, ny: float) -> tuple[float, float]:
     """Wrapper for try_move that uses current player position."""
@@ -1188,6 +1295,11 @@ def main() -> None:
         enemies_batch = build_enemies_batch(enemies)
         if enemies_batch.size:
             renderer.draw_arrays(enemies_batch, renderer.textures[200], use_tex=True)
+
+        # Enemy HP bars (må tegnes etter fiendene, men før UI-elementer)
+        enemy_hp_bars = build_enemy_hp_bars(enemies)
+        if enemy_hp_bars.size:
+            renderer.draw_arrays(enemy_hp_bars, renderer.white_tex, use_tex=False)
 
         # Crosshair
         cross = build_crosshair_quads(8, 2)

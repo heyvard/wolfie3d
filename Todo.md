@@ -24,6 +24,7 @@ Til slutt samler vi alt og setter det sammen til en demo for JavaZone 🚀
 - [x] 🎭 **Forskjellige fiender:** Ulike HP/fart  
 - [x] 🕺 **Fiende-animasjon:** Bytt mellom sprites for å gi liv  
 - [x] ⚰️ **Dødsanimasjon:** Egen sprite når fienden dør  
+- [x] 📊 **HP-visning:** HP-balker vises over fiendene med fargekoding  
 
 ## 🏁 Checkpoints & mål
 - [ ] 📍 **Checkpoints:** Spilleren må innom punkter i kartet  
