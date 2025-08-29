@@ -1268,6 +1268,9 @@ def show_highscores_screen(renderer, final_score: int) -> None:
         add_highscore(player_name, final_score)
         print(f"Highscore lagret for {player_name}!")
     
+    # Last inn oppdaterte highscores etter at ny highscore er lagt til
+    highscores = load_highscores()
+    
     # Vis highscores
     print("\n=== HIGHSCORES ===")
     for i, hs in enumerate(highscores[:10], 1):
