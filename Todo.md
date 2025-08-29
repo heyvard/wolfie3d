@@ -9,10 +9,10 @@ Til slutt samler vi alt og setter det sammen til en demo for JavaZone 🚀
 ---
 
 ## 🎯 Core Gameplay
-- [ ] 👹 **Fiende HP:** Fienden tåler flere skudd (f.eks. 3) før den dør  
-- [ ] ❤️ **Spiller HP:** Spilleren tar skade når fiender kommer nær  
-- [ ] 💀 **Game Over:** Vis en melding når spilleren dør  
-- [ ] 🏆 **Score:** +100 poeng per fiende drept, vis på skjermen  
+- [x] 👹 **Fiende HP:** Fienden tåler flere skudd (f.eks. 3) før den dør  
+- [x] ❤️ **Spiller HP:** Spilleren tar skade når fiender kommer nær  
+- [x] 💀 **Game Over:** Vis en melding når spilleren dør  
+- [x] 🏆 **Score:** +100 poeng per fiende drept, vis på skjermen  
 
 ## 🔫 Våpen & ammo
 - [ ] 🔢 **Ammo-teller:** Spilleren har begrenset ammo  
@@ -20,10 +20,10 @@ Til slutt samler vi alt og setter det sammen til en demo for JavaZone 🚀
 - [ ] 📦 **Pickup-objekt:** Lag et ammo-box på gulvet som kan plukkes opp  
 
 ## 👹 Fiender
-- [ ] 👥 **Flere fiender:** Legg inn flere i kartet  
-- [ ] 🎭 **Forskjellige fiender:** Ulike HP/fart  
-- [ ] 🕺 **Fiende-animasjon:** Bytt mellom sprites for å gi liv  
-- [ ] ⚰️ **Dødsanimasjon:** Egen sprite når fienden dør  
+- [x] 👥 **Flere fiender:** Legg inn flere i kartet  
+- [x] 🎭 **Forskjellige fiender:** Ulike HP/fart  
+- [x] 🕺 **Fiende-animasjon:** Bytt mellom sprites for å gi liv  
+- [x] ⚰️ **Dødsanimasjon:** Egen sprite når fienden dør  
 
 ## 🏁 Checkpoints & mål
 - [ ] 📍 **Checkpoints:** Spilleren må innom punkter i kartet  

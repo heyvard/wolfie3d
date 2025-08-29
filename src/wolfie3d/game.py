@@ -33,155 +33,35 @@ import numpy as np
 import pygame
 from OpenGL import GL as gl
 
+# Import refactored modules
+from .utils.constants import *
+from .utils.input import handle_input
+from .world.map import try_move, in_map, is_wall, clamp01
+from .entities.bullet import Bullet, SauBullet
+from .entities.enemy import Enemy
+
 if TYPE_CHECKING:  # kun for typing hints
     from collections.abc import Sequence
 
-# ---------- Konfig ----------
-WIDTH, HEIGHT = 1024, 600
-HALF_W, HALF_H = WIDTH // 2, HEIGHT // 2
-FPS = 60
-
-# Kamera/FOV
-FOV = 66 * math.pi / 180.0
-PLANE_LEN = math.tan(FOV / 2)
-
-# Bevegelse
-MOVE_SPEED = 3.0      # enheter/sek
-ROT_SPEED = 2.0       # rad/sek
-STRAFE_SPEED = 2.5
-
-# Våpen
-WEAPON_PISTOL = 1
-WEAPON_SAU = 2
+# ---------- Spiller tilstand ----------
 current_weapon = WEAPON_PISTOL
 
-# Tekstur-størrelse brukt på GPU (proseduralt generert)
-TEX_W = TEX_H = 256
-
-# Depth mapping (lineær til [0..1] for gl_FragDepth)
-FAR_PLANE = 100.0
-
-# Kart (0=tomt, >0=veggtype/tekstur-id)
-MAP: list[list[int]] = [
-    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-    [1,0,2,0,0,0,0,0,0,0,0,3,0,0,0,0,0,4,0,1],
-    [1,0,2,0,0,0,0,0,0,0,0,3,0,0,0,0,0,4,0,1],
-    [1,0,2,0,0,0,0,0,0,0,0,3,0,0,0,0,0,4,0,1],
-    [1,0,2,0,0,0,0,0,0,0,0,3,0,0,0,0,0,4,0,1],
-    [1,0,2,0,0,0,0,0,0,0,0,3,0,0,0,0,0,4,0,1],
-    [1,0,2,0,0,0,0,0,0,0,0,3,0,0,0,0,0,4,0,1],
-    [1,0,2,0,0,0,0,0,0,0,0,3,0,0,0,0,0,4,0,1],
-    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-    [1,0,2,2,2,2,2,0,0,0,0,3,3,3,0,0,4,4,4,1],
-    [1,0,0,0,0,0,2,0,0,0,0,3,0,0,0,0,4,0,0,1],
-    [1,0,0,0,0,0,2,0,0,0,0,3,0,0,0,0,4,0,0,1],
-    [1,0,0,0,0,0,2,0,0,0,0,3,0,0,0,0,4,0,0,1],
-    [1,0,0,0,0,0,2,0,0,0,0,3,0,0,0,0,4,0,0,1],
-    [1,0,0,0,0,0,2,0,0,0,0,3,0,0,0,0,4,0,0,1],
-    [1,0,0,0,0,0,2,0,0,0,0,3,0,0,0,0,4,0,0,1],
-    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-]
-MAP_W = len(MAP[0])
-MAP_H = len(MAP)
-
 # Startpos og retning
-player_x = 3.5
-player_y = 10.5
-dir_x, dir_y = 1.0, 0.0
-plane_x, plane_y = 0.0, PLANE_LEN
+player_x = PLAYER_START_X
+player_y = PLAYER_START_Y
+dir_x, dir_y = PLAYER_START_DIR_X, PLAYER_START_DIR_Y
+plane_x, plane_y = PLAYER_START_PLANE_X, PLAYER_START_PLANE_Y
+
+# Spiller HP
+player_hp = PLAYER_MAX_HP
+player_max_hp = PLAYER_MAX_HP
+player_invulnerable_time = 0.0  # Tid hvor spilleren ikke kan ta skade
+
+# Score system
+player_score = 0
 
 # ---------- Hjelpere ----------
-def in_map(ix: int, iy: int) -> bool:
-    return 0 <= ix < MAP_W and 0 <= iy < MAP_H
-
-def is_wall(ix: int, iy: int) -> bool:
-    return in_map(ix, iy) and MAP[iy][ix] > 0
-
-def clamp01(x: float) -> float:
-    if x < 0.0: return 0.0
-    if x > 1.0: return 1.0
-    return x
-
-# ---------- Prosjektil ----------
-class Bullet:
-    def __init__(self, x: float, y: float, vx: float, vy: float) -> None:
-        self.x = x
-        self.y = y
-        self.vx = vx
-        self.vy = vy
-        self.alive = True
-        self.age = 0.0
-        self.height_param = 0.2  # 0..~0.65 (stiger visuelt)
-
-    def update(self, dt: float) -> None:
-        if not self.alive:
-            return
-        nx = self.x + self.vx * dt
-        ny = self.y + self.vy * dt
-        if is_wall(int(nx), int(ny)):
-            self.alive = False
-            return
-        self.x, self.y = nx, ny
-        self.age += dt
-        self.height_param = min(0.65, self.height_param + 0.35 * dt)
-
-class SauBullet:
-    """Sau som sendes som prosjektil"""
-    def __init__(self, x: float, y: float, vx: float, vy: float) -> None:
-        self.x = x
-        self.y = y
-        self.vx = vx
-        self.vy = vy
-        self.alive = True
-        self.age = 0.0
-        self.height_param = 0.3  # Litt høyere enn kuler
-
-    def update(self, dt: float) -> None:
-        if not self.alive:
-            return
-        nx = self.x + self.vx * dt
-        ny = self.y + self.vy * dt
-        if is_wall(int(nx), int(ny)):
-            self.alive = False
-            return
-        self.x, self.y = nx, ny
-        self.age += dt
-        self.height_param = min(0.7, self.height_param + 0.3 * dt)
-
-# ---------- Fiende ----------
-class Enemy:
-    def __init__(self, x: float, y: float) -> None:
-        self.x = x
-        self.y = y
-        self.alive = True
-        self.radius = 0.35     # kollisjon/hitbox i kart-enheter
-        self.speed = 1.4       # enheter/sek (enkel jakt)
-        self.height_param = 0.5  # hvor høyt sprite sentreres i skjerm
-
-    def _try_move(self, nx: float, ny: float) -> None:
-        # enkel vegg-kollisjon (sirkulær hitbox mot grid)
-        # prøv X:
-        if not is_wall(int(nx), int(self.y)):
-            self.x = nx
-        # prøv Y:
-        if not is_wall(int(self.x), int(ny)):
-            self.y = ny
-
-    def update(self, dt: float) -> None:
-        if not self.alive:
-            return
-        # enkel "chase": gå mot spilleren, stopp om rett foran vegg
-        dx = player_x - self.x
-        dy = player_y - self.y
-        dist = math.hypot(dx, dy) + 1e-9
-        # ikke gå helt oppå spilleren
-        if dist > 0.75:
-            ux, uy = dx / dist, dy / dist
-            step = self.speed * dt
-            self._try_move(self.x + ux * step, self.y + uy * step)
+# ---------- Prosedural tekstur (pygame.Surface) ----------
 
 
 # ---------- Prosedural tekstur (pygame.Surface) ----------
@@ -713,9 +593,16 @@ def build_sprites_batch(bullets: list[Bullet | SauBullet]) -> np.ndarray:
         depth = clamp01(trans_y / FAR_PLANE)
 
         r = g = bcol = 1.0  # ingen ekstra farge-dim
-        # u,v: full tekstur
-        u0, v0 = 0.0, 0.0
-        u1, v1 = 1.0, 1.0
+        
+        # Teksturkoordinater - flip for sauen
+        if isinstance(b, SauBullet):
+            # Sau - flip texture coordinates
+            u0, v0 = 0.0, 1.0
+            u1, v1 = 1.0, 0.0
+        else:
+            # Kule - normal texture coordinates
+            u0, v0 = 0.0, 0.0
+            u1, v1 = 1.0, 1.0
 
         verts.extend([
             x0, y0, u0, v0, r, g, bcol, depth,
@@ -929,6 +816,135 @@ def build_weapon_status_display() -> np.ndarray:
     
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
+def build_hp_display() -> np.ndarray:
+    """Viser spiller HP som en rød balk øverst til venstre."""
+    global player_hp, player_max_hp
+    
+    # HP balk
+    bar_width = 200
+    bar_height = 20
+    x = 10
+    y = 10
+    
+    # Bakgrunn (mørk rød)
+    bg_x0 = (2.0 * x) / WIDTH - 1.0
+    bg_x1 = (2.0 * (x + bar_width)) / WIDTH - 1.0
+    bg_y0 = 1.0 - 2.0 * (y / HEIGHT)
+    bg_y1 = 1.0 - 2.0 * ((y + bar_height) / HEIGHT)
+    
+    # HP-fyll (lys rød)
+    hp_ratio = max(0.0, player_hp / player_max_hp)
+    hp_width = int(bar_width * hp_ratio)
+    hp_x0 = (2.0 * x) / WIDTH - 1.0
+    hp_x1 = (2.0 * (x + hp_width)) / WIDTH - 1.0
+    
+    verts = []
+    
+    # Bakgrunn (mørk rød)
+    bg_r, bg_g, bg_b = 0.3, 0.0, 0.0
+    verts.extend([
+        bg_x0, bg_y0, 0.0, 0.0, bg_r, bg_g, bg_b, 0.0,
+        bg_x0, bg_y1, 0.0, 1.0, bg_r, bg_g, bg_b, 0.0,
+        bg_x1, bg_y0, 1.0, 0.0, bg_r, bg_g, bg_b, 0.0,
+        bg_x1, bg_y0, 1.0, 0.0, bg_r, bg_g, bg_b, 0.0,
+        bg_x0, bg_y1, 0.0, 1.0, bg_r, bg_g, bg_b, 0.0,
+        bg_x1, bg_y1, 1.0, 1.0, bg_r, bg_g, bg_b, 0.0,
+    ])
+    
+    # HP-fyll (lys rød)
+    if hp_ratio > 0.0:
+        hp_r, hp_g, hp_b = 1.0, 0.2, 0.2
+        verts.extend([
+            hp_x0, bg_y0, 0.0, 0.0, hp_r, hp_g, hp_b, 0.0,
+            hp_x0, bg_y1, 0.0, 1.0, hp_r, hp_g, hp_b, 0.0,
+            hp_x1, bg_y0, 1.0, 0.0, hp_r, hp_g, hp_b, 0.0,
+            hp_x1, bg_y0, 1.0, 0.0, hp_r, hp_g, hp_b, 0.0,
+            hp_x0, bg_y1, 0.0, 1.0, hp_r, hp_g, hp_b, 0.0,
+            hp_x1, bg_y1, 1.0, 1.0, hp_r, hp_g, hp_b, 0.0,
+        ])
+    
+    return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
+
+def build_score_display() -> np.ndarray:
+    """Viser spiller score øverst til høyre."""
+    global player_score
+    
+    # Score boks
+    bar_width = 120
+    bar_height = 30
+    x = WIDTH - bar_width - 10
+    y = 50  # Under våpen-status
+    
+    x0 = (2.0 * x) / WIDTH - 1.0
+    x1 = (2.0 * (x + bar_width)) / WIDTH - 1.0
+    y0 = 1.0 - 2.0 * (y / HEIGHT)
+    y1 = 1.0 - 2.0 * ((y + bar_height) / HEIGHT)
+    
+    # Gul farge for score
+    r, g, b = 1.0, 1.0, 0.0
+    depth = 0.0
+    
+    verts = [
+        x0, y0, 0.0, 0.0, r, g, b, depth,
+        x0, y1, 0.0, 1.0, r, g, b, depth,
+        x1, y0, 1.0, 0.0, r, g, b, depth,
+        x1, y0, 1.0, 0.0, r, g, b, depth,
+        x0, y1, 0.0, 1.0, r, g, b, depth,
+        x1, y1, 1.0, 1.0, r, g, b, depth,
+    ]
+    
+    return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
+
+def show_game_over_screen(renderer, final_score: int) -> None:
+    """Viser Game Over skjerm med final score."""
+    print("=== GAME OVER ===")
+    print(f"Final Score: {final_score}")
+    print("Trykk ESC for å avslutte...")
+    
+    # Vis Game Over skjerm i 3 sekunder
+    start_time = pygame.time.get_ticks()
+    while pygame.time.get_ticks() - start_time < 3000:  # 3 sekunder
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                return
+        
+        # Render Game Over overlay
+        gl.glViewport(0, 0, WIDTH, HEIGHT)
+        gl.glClearColor(0.0, 0.0, 0.0, 1.0)  # Svart bakgrunn
+        gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+        
+        # Game Over tekst (enkel rød balk)
+        go_width = 400
+        go_height = 100
+        x = (WIDTH - go_width) // 2
+        y = (HEIGHT - go_height) // 2
+        
+        x0 = (2.0 * x) / WIDTH - 1.0
+        x1 = (2.0 * (x + go_width)) / WIDTH - 1.0
+        y0 = 1.0 - 2.0 * (y / HEIGHT)
+        y1 = 1.0 - 2.0 * ((y + go_height) / HEIGHT)
+        
+        # Rød farge for Game Over
+        r, g, b = 1.0, 0.0, 0.0
+        depth = 0.0
+        
+        go_verts = [
+            x0, y0, 0.0, 0.0, r, g, b, depth,
+            x0, y1, 0.0, 1.0, r, g, b, depth,
+            x1, y0, 1.0, 0.0, r, g, b, depth,
+            x1, y0, 1.0, 0.0, r, g, b, depth,
+            x0, y1, 0.0, 1.0, r, g, b, depth,
+            x1, y1, 1.0, 1.0, r, g, b, depth,
+        ]
+        
+        go_array = np.asarray(go_verts, dtype=np.float32).reshape((-1, 8))
+        renderer.draw_arrays(go_array, renderer.white_tex, use_tex=False)
+        
+        pygame.display.flip()
+        pygame.time.wait(16)  # ~60 FPS
+
 def build_minimap_quads() -> np.ndarray:
     """Liten GL-basert minimap øverst til venstre."""
     scale = 6
@@ -977,56 +993,13 @@ def build_minimap_quads() -> np.ndarray:
     return np.asarray(verts, dtype=np.float32).reshape((-1, 8))
 
 # ---------- Input/fysikk ----------
-def try_move(nx: float, ny: float) -> tuple[float, float]:
-    if not is_wall(int(nx), int(player_y)):
-        x = nx
-    else:
-        x = player_x
-    if not is_wall(int(player_x), int(ny)):
-        y = ny
-    else:
-        y = player_y
-    return x, y
-
-def handle_input(dt: float) -> None:
-    global player_x, player_y, dir_x, dir_y, plane_x, plane_y
-    keys = pygame.key.get_pressed()
-    rot = 0.0
-    if keys[pygame.K_LEFT] or keys[pygame.K_q]:
-        rot -= ROT_SPEED * dt
-    if keys[pygame.K_RIGHT] or keys[pygame.K_e]:
-        rot += ROT_SPEED * dt
-    if rot != 0.0:
-        cosr, sinr = math.cos(rot), math.sin(rot)
-        ndx = dir_x * cosr - dir_y * sinr
-        ndy = dir_x * sinr + dir_y * cosr
-        npx = plane_x * cosr - plane_y * sinr
-        npy = plane_x * sinr + plane_y * cosr
-        dir_x, dir_y, plane_x, plane_y = ndx, ndy, npx, npy
-
-    forward = 0.0
-    if keys[pygame.K_w] or keys[pygame.K_UP]:
-        forward += MOVE_SPEED * dt
-    if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-        forward -= MOVE_SPEED * dt
-    if forward != 0.0:
-        nx = player_x + dir_x * forward
-        ny = player_y + dir_y * forward
-        player_x, player_y = try_move(nx, ny)
-
-    strafe = 0.0
-    if keys[pygame.K_a]:
-        strafe -= STRAFE_SPEED * dt
-    if keys[pygame.K_d]:
-        strafe += STRAFE_SPEED * dt
-    if strafe != 0.0:
-        nx = player_x + (-dir_y) * strafe
-        ny = player_y + (dir_x) * strafe
-        player_x, player_y = try_move(nx, ny)
+def try_move_player(nx: float, ny: float) -> tuple[float, float]:
+    """Wrapper for try_move that uses current player position."""
+    return try_move(nx, ny, player_x, player_y)
 
 # ---------- Main ----------
 def main() -> None:
-    global current_weapon
+    global current_weapon, player_hp, player_invulnerable_time, player_score, player_x, player_y, dir_x, dir_y, plane_x, plane_y
     pygame.init()
     pygame.display.set_caption("Vibe Wolf (OpenGL)")
 
@@ -1047,9 +1020,14 @@ def main() -> None:
     recoil_t = 0.0
 
     enemies: list[Enemy] = [
-        Enemy(6.5, 10.5),
-        Enemy(12.5, 12.5),
-        Enemy(16.5, 6.5),
+        Enemy(6.5, 10.5, "normal"),   # Vanlig fiende
+        Enemy(12.5, 12.5, "normal"),  # Vanlig fiende
+        Enemy(16.5, 6.5, "strong"),   # Sterk fiende
+        Enemy(8.5, 8.5, "fast"),      # Rask fiende
+        Enemy(14.5, 8.5, "normal"),   # Vanlig fiende
+        Enemy(10.5, 14.5, "strong"),  # Sterk fiende
+        Enemy(18.5, 10.5, "fast"),    # Rask fiende
+        Enemy(4.5, 12.5, "normal"),   # Vanlig fiende
     ]
 
     # Mus-capture (synlig cursor + crosshair)
@@ -1113,7 +1091,13 @@ def main() -> None:
                 firing = True
                 recoil_t = 0.0
 
-        handle_input(dt)
+        # Handle input using the new module
+        new_player_x, new_player_y, new_dir_x, new_dir_y, new_plane_x, new_plane_y = handle_input(
+            dt, player_x, player_y, dir_x, dir_y, plane_x, plane_y, try_move_player
+        )
+        player_x, player_y = new_player_x, new_player_y
+        dir_x, dir_y = new_dir_x, new_dir_y
+        plane_x, plane_y = new_plane_x, new_plane_y
 
         # Oppdater bullets
         for b in bullets:
@@ -1126,14 +1110,43 @@ def main() -> None:
                 dx = e.x - b.x
                 dy = e.y - b.y
                 if dx * dx + dy * dy <= (e.radius * e.radius):
-                    e.alive = False  # fienden "dør"
+                    e.hp -= 1  # Fienden tar skade
                     b.alive = False  # kula forbrukes
+                    if e.hp <= 0:
+                        e.is_dying = True  # Start dødsanimasjon
+                        e.death_time = 0.0
+                        player_score += 100  # +100 poeng per fiende drept
+                        print(f"Fiende drept! HP: {e.hp}/{e.max_hp} | Score: {player_score}")
+                    else:
+                        print(f"Fiende skadet! HP: {e.hp}/{e.max_hp}")
                     break
         bullets = [b for b in bullets if b.alive]
 
-        # Oppdater fiender
+        # Oppdater fiender og sjekk spiller-skade
         for e in enemies:
-            e.update(dt)
+            e.update(dt, player_x, player_y)
+            
+            # Sjekk om fiende er nær nok til å skade spilleren
+            if e.alive and not e.is_dying:  # Ikke skade hvis fienden er døende
+                dx = player_x - e.x
+                dy = player_y - e.y
+                dist = math.hypot(dx, dy)
+                
+                # Fiende skader spilleren hvis den er nær og spilleren ikke er invulnerable
+                if dist <= 0.8 and player_invulnerable_time <= 0.0:
+                    player_hp -= 10  # 10 skade per frame når fiende er nær
+                    player_invulnerable_time = 0.5  # 0.5 sekunder invulnerability
+                    print(f"Spiller tar skade! HP: {player_hp}/{player_max_hp}")
+                    
+                    # Sjekk om spilleren dør
+                    if player_hp <= 0:
+                        print(f"GAME OVER - Spilleren døde! Final Score: {player_score}")
+                        show_game_over_screen(renderer, player_score)
+                        running = False
+        
+        # Oppdater invulnerability timer
+        if player_invulnerable_time > 0.0:
+            player_invulnerable_time -= dt
 
         # ---------- Render ----------
         gl.glViewport(0, 0, WIDTH, HEIGHT)
@@ -1155,10 +1168,21 @@ def main() -> None:
             renderer.draw_arrays(arr, renderer.textures[tid], use_tex=True)
 
         # Sprites (kuler og sauer)
-        spr = build_sprites_batch(bullets)
-        if spr.size:
-            # Bruk kule-tekstur for alle prosjektiler (forenklet)
-            renderer.draw_arrays(spr, renderer.textures[99], use_tex=True)
+        # Separer kuler og sauer
+        bullet_list = [b for b in bullets if isinstance(b, Bullet)]
+        sau_list = [b for b in bullets if isinstance(b, SauBullet)]
+        
+        # Render kuler
+        if bullet_list:
+            bullet_spr = build_sprites_batch(bullet_list)
+            if bullet_spr.size:
+                renderer.draw_arrays(bullet_spr, renderer.textures[99], use_tex=True)
+        
+        # Render sauer
+        if sau_list:
+            sau_spr = build_sprites_batch(sau_list)
+            if sau_spr.size:
+                renderer.draw_arrays(sau_spr, renderer.textures[301], use_tex=True)
 
         # Enemies (billboards)
         enemies_batch = build_enemies_batch(enemies)
@@ -1190,6 +1214,10 @@ def main() -> None:
         mm = build_minimap_quads()
         renderer.draw_arrays(mm, renderer.white_tex, use_tex=False)
 
+        # HP display
+        hp_display = build_hp_display()
+        renderer.draw_arrays(hp_display, renderer.white_tex, use_tex=False)
+
         # Weapon status display
         status_display = build_weapon_status_display()
         
@@ -1202,6 +1230,10 @@ def main() -> None:
             status_tex = renderer.white_tex  # Fallback
         
         renderer.draw_arrays(status_display, status_tex, use_tex=True)
+
+        # Score display
+        score_display = build_score_display()
+        renderer.draw_arrays(score_display, renderer.white_tex, use_tex=False)
 
         pygame.display.flip()
 
